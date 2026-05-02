@@ -123,6 +123,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('open');
   const [limitValue, setLimitValue] = useState('50');
   const [sending, setSending] = useState(false);
+  const [clearingId, setClearingId] = useState(null);
   const [toast, setToast] = useState({ active: false, message: '', error: false });
   const [resultsModal, setResultsModal] = useState({ active: false, results: [] });
 
@@ -212,6 +213,20 @@ export default function App() {
     loadOrders();
   }, [loadOrders]);
 
+  const clearQpxSerial = useCallback(async (orderId, orderNumber) => {
+    setClearingId(orderId);
+    try {
+      const res = await fetch(`/api/shopify/orders/${orderId}/qpx-serial`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('فشل الطلب');
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, qpx_serial: null } : o));
+      showToast(`✅ تم إلغاء إرسال أوردر #${orderNumber}`);
+    } catch (e) {
+      showToast('❌ خطأ في إلغاء الإرسال: ' + e.message, true);
+    } finally {
+      setClearingId(null);
+    }
+  }, []);
+
   function showToast(message, isError = false) {
     setToast({ active: true, message, error: isError });
   }
@@ -291,7 +306,20 @@ export default function App() {
         {/* QPX Status */}
         <IndexTable.Cell>
           {isSent ? (
-            <Badge tone="success">✅ {order.qpx_serial}</Badge>
+            <InlineStack gap="200" blockAlign="center">
+              <Badge tone="success">✅ {order.qpx_serial}</Badge>
+              <Tooltip content="إلغاء الإرسال (لإعادة الإرسال مرة أخرى)">
+                <Button
+                  size="micro"
+                  tone="critical"
+                  variant="plain"
+                  loading={clearingId === order.id}
+                  onClick={() => clearQpxSerial(order.id, order.shopify_order_number)}
+                >
+                  ↩
+                </Button>
+              </Tooltip>
+            </InlineStack>
           ) : (
             <Badge tone="attention">⏳ لم يُرسل</Badge>
           )}

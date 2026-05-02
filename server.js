@@ -181,6 +181,23 @@ async function saveQpxSerialToShopify(orderId, orderNumber, serial) {
   }
 }
 
+// ─── Shopify: Clear QPX Serial ───────────────────────────────────────────────
+
+app.delete('/api/shopify/orders/:id/qpx-serial', async (req, res) => {
+  const orderId = req.params.id;
+  try {
+    await axios.put(
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}.json`,
+      { order: { id: orderId, note_attributes: [], tags: '' } },
+      { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Clear QPX serial error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
+
 // ─── QPX: Get Sent Orders ────────────────────────────────────────────────────
 
 app.get('/api/qpx/orders', async (req, res) => {
