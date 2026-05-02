@@ -79,7 +79,7 @@ app.get('/api/shopify/orders', async (req, res) => {
         created_at: o.created_at,
         customer_name: `${addr.first_name || ''} ${addr.last_name || ''}`.trim() || o.contact_email,
         phone: addr.phone || o.phone || '',
-        city: addr.city || '',
+        city: addr.province || addr.city || '',
         address: [addr.address1, addr.address2].filter(Boolean).join(', '),
         items,
         total_price: o.total_price,

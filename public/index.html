@@ -209,7 +209,7 @@
         <th>التاريخ</th>
         <th>العميل</th>
         <th>الهاتف</th>
-        <th>المدينة</th>
+        <th>المحافظة</th>
         <th>العنوان</th>
         <th>المنتجات</th>
         <th>الإجمالي</th>
@@ -251,39 +251,63 @@ async function loadCities() {
   }
 }
 
-// English/variant → QPX Arabic city name mapping
+// Shopify province/governorate → QPX Arabic governorate name mapping
 const CITY_MAP = {
-  // Cairo area
-  'cairo': 'قاهره', 'new cairo': 'قاهره', 'القاهرة': 'قاهره', 'القاهر': 'قاهره',
-  'heliopolis': 'قاهره', 'nasr city': 'قاهره', 'maadi': 'قاهره', 'zamalek': 'قاهره',
-  'october': 'جيزة', '6th october': 'جيزة', 'اكتوبر': 'جيزة', 'أكتوبر': 'جيزة',
-  'sheikh zayed': 'جيزة', 'شيخ زايد': 'جيزة',
+  // Cairo
+  'cairo': 'قاهره', 'القاهرة': 'قاهره', 'القاهره': 'قاهره', 'القاهر': 'قاهره',
   // Alexandria
-  'alexandria': 'اسكندريه', 'الإسكندرية': 'اسكندريه', 'الاسكندرية': 'اسكندريه',
-  // Giza
+  'alexandria': 'اسكندريه', 'الإسكندرية': 'اسكندريه', 'الاسكندريه': 'اسكندريه',
+  // Giza (includes 6th of October & Sheikh Zayed)
   'giza': 'جيزة', 'الجيزة': 'جيزة', 'الجيزه': 'جيزة',
+  '6th of october': 'جيزة', '6 october': 'جيزة', 'october': 'جيزة',
+  'اكتوبر': 'جيزة', 'أكتوبر': 'جيزة', 'سادس اكتوبر': 'جيزة',
   // Qalyubia
-  'qalyubia': 'قليوبية', 'shorouk': 'قليوبية', 'الشروق': 'قليوبية',
-  'obour': 'قليوبية', 'العبور': 'قليوبية', 'badr': 'قليوبية', 'بدر': 'قليوبية',
-  // Other governorates
-  'aswan': 'اسوان', 'luxor': 'اقصر', 'qena': 'قنا', 'sohag': 'سوهاج',
-  'assiut': 'اسيوط', 'asyut': 'اسيوط', 'minya': 'منيا', 'المنيا': 'منيا',
-  'beni suef': 'بني سويف', 'fayoum': 'فيوم', 'الفيوم': 'فيوم',
-  'mansoura': 'دقهلية', 'dakahlia': 'دقهلية',
-  'tanta': 'غربيه', 'gharbia': 'غربيه',
-  'zagazig': 'شرقيه', 'sharqia': 'شرقيه',
-  'damanhour': 'البحيرة', 'beheira': 'البحيرة',
-  'kafrelsheikh': 'كفر الشيخ', 'kafr el sheikh': 'كفر الشيخ',
+  'qalyubia': 'قليوبية', 'القليوبية': 'قليوبية',
+  // Monufia
+  'monufia': 'المنوفية', 'menofia': 'المنوفية', 'المنوفية': 'المنوفية',
+  // Beheira
+  'beheira': 'البحيرة', 'البحيرة': 'البحيرة',
+  // Gharbia
+  'gharbia': 'غربيه', 'الغربية': 'غربيه',
+  // Sharqia
+  'sharqia': 'شرقيه', 'الشرقية': 'شرقيه',
+  // Dakahlia
+  'dakahlia': 'دقهلية', 'الدقهلية': 'دقهلية',
+  // Damietta
   'damietta': 'دمياط', 'دمياط': 'دمياط',
-  'monufia': 'المنوفية', 'menofia': 'المنوفية',
+  // Kafr el-Sheikh
+  'kafr el sheikh': 'كفر الشيخ', 'kafr el-sheikh': 'كفر الشيخ', 'كفر الشيخ': 'كفر الشيخ',
+  // Ismailia
   'ismailia': 'اسماعيلية', 'الإسماعيلية': 'اسماعيلية',
-  'suez': 'سويس', 'السويس': 'سويس',
+  // Port Said
   'port said': 'بورسعيد', 'بورسعيد': 'بورسعيد',
-  'hurghada': 'بحر الاحمر', 'red sea': 'بحر الاحمر',
-  'sharm': 'شرم الشيخ', 'sharm el sheikh': 'شرم الشيخ',
-  'matrouh': 'مطروح', 'marsa matrouh': 'مطروح',
-  'new valley': 'وادي جديد', 'wadi gedid': 'وادي جديد',
-  'madinat': 'مترو', 'مدينتي': 'قاهره',
+  // Suez
+  'suez': 'سويس', 'السويس': 'سويس',
+  // Fayoum
+  'fayoum': 'فيوم', 'الفيوم': 'فيوم',
+  // Beni Suef
+  'beni suef': 'بني سويف', 'بني سويف': 'بني سويف',
+  // Minya
+  'minya': 'منيا', 'المنيا': 'منيا',
+  // Asyut
+  'asyut': 'اسيوط', 'assiut': 'اسيوط', 'أسيوط': 'اسيوط',
+  // Sohag
+  'sohag': 'سوهاج', 'سوهاج': 'سوهاج',
+  // Qena
+  'qena': 'قنا', 'قنا': 'قنا',
+  // Luxor
+  'luxor': 'اقصر', 'الأقصر': 'اقصر',
+  // Aswan
+  'aswan': 'اسوان', 'أسوان': 'اسوان',
+  // Red Sea
+  'red sea': 'بحر الاحمر', 'البحر الأحمر': 'بحر الاحمر',
+  // South Sinai
+  'south sinai': 'جنوب سيناء', 'جنوب سيناء': 'جنوب سيناء',
+  'sharm el sheikh': 'جنوب سيناء', 'sharm': 'جنوب سيناء',
+  // Matrouh
+  'matrouh': 'مطروح', 'مطروح': 'مطروح',
+  // New Valley
+  'new valley': 'وادي جديد', 'الوادي الجديد': 'وادي جديد',
 };
 
 function matchCity(shopifyCity) {
@@ -356,7 +380,7 @@ function renderOrders(orders) {
     const isSent = !!o.qpx_serial;
     const cityMatch = matchCity(o.city);
     const cityHint = o.city && !cityMatch
-      ? `<br/><span class="city-mismatch">⚠️ "${o.city}" غير موجودة في QPX</span>`
+      ? `<br/><span class="city-mismatch">⚠️ "${o.city}" غير معروفة</span>`
       : '';
 
     const row = document.createElement('tr');
