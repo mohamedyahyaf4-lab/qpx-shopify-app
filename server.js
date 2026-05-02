@@ -36,6 +36,7 @@ app.get('/', (req, res) => {
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const QPX_BASE = 'https://api.qpxpress.com';
+const QPX_CUSTOMER_ID = parseInt(process.env.QPX_CUSTOMER_ID || '1021');
 let qpxToken = null;
 let qpxTokenExpiry = 0;
 let qpxRefreshToken = process.env.QPX_REFRESH_TOKEN;
@@ -134,9 +135,10 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         phone: order.phone,
         address: order.address,
         city: order.qpx_city_id,
+        customer: QPX_CUSTOMER_ID,
         total_amount: parseFloat(order.total_price) || 0,
         notes: `Shopify Order #${order.shopify_order_number}`,
-        order_date: new Date().toISOString().split('T')[0],
+        order_date: new Date().toISOString(),
       };
 
       const qpxRes = await axios.post(`${QPX_BASE}/addorders/order/`, payload, {
