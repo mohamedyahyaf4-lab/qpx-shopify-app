@@ -133,7 +133,7 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         full_name: order.customer_name,
         phone: order.phone,
         address: order.address,
-        city: order.city,
+        city: order.qpx_city_id,
         total_amount: parseFloat(order.total_price) || 0,
         notes: `Shopify Order #${order.shopify_order_number}`,
         order_date: new Date().toISOString().split('T')[0],

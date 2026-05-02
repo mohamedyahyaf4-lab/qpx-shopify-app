@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QPX Express - Shipping</title>
-  <!-- Shopify App Bridge -->
-  <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+  <!-- Shopify App Bridge (async so it never blocks page render) -->
+  <script src="https://unpkg.com/@shopify/app-bridge@3" async></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f4f6f9; color: #1a1a2e; }
@@ -112,7 +112,7 @@
       color: #888;
       font-size: 1rem;
     }
-    .loading::after {
+    .loading:not(.error)::after {
       content: '';
       display: inline-block;
       width: 20px;
@@ -308,6 +308,8 @@ function matchCity(shopifyCity) {
 async function loadOrders() {
   const loading = document.getElementById('loadingMsg');
   const table = document.getElementById('ordersTable');
+  loading.classList.remove('error');
+  loading.textContent = 'جاري التحميل';
   loading.style.display = 'block';
   table.style.display = 'none';
   selectedIds.clear();
@@ -316,15 +318,23 @@ async function loadOrders() {
   try {
     const status = document.getElementById('statusFilter').value;
     const limit = document.getElementById('limitInput').value || 50;
-    const res = await fetch(`/api/shopify/orders?status=${status}&limit=${limit}`);
+
+    // Timeout after 20s to avoid infinite loading spinner
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    const res = await fetch(`/api/shopify/orders?status=${status}&limit=${limit}`, { signal: controller.signal });
+    clearTimeout(timer);
+
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    if (data.error) throw new Error(JSON.stringify(data.error));
 
     allOrders = data.orders;
     renderOrders(allOrders);
     updateStats();
   } catch (e) {
-    loading.textContent = '❌ خطأ في التحميل: ' + e.message;
+    const msg = e.name === 'AbortError' ? 'انتهت مهلة الاتصال، تحقق من الإنترنت' : e.message;
+    loading.classList.add('error');
+    loading.textContent = '❌ خطأ في التحميل: ' + msg;
   }
 }
 
@@ -336,9 +346,9 @@ function renderOrders(orders) {
   tbody.innerHTML = '';
 
   if (!orders.length) {
-    loading.style.display = 'block';
+    loading.classList.add('error');
     loading.textContent = 'لا توجد أوردرات';
-    loading.style.animation = 'none';
+    loading.style.display = 'block';
     return;
   }
 
@@ -438,10 +448,10 @@ async function sendSelected() {
     .filter(o => selectedIds.has(o.id))
     .map(o => {
       const cityMatch = matchCity(o.city);
-      return { ...o, city: cityMatch ? cityMatch.name : o.city };
+      return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
     });
 
-  const missingCity = ordersToSend.filter(o => !matchCity(o.city) && !o.city);
+  const missingCity = ordersToSend.filter(o => !o.qpx_city_id);
   if (missingCity.length) {
     showToast(`⚠️ ${missingCity.length} أوردر بدون مدينة`, 'error');
   }
