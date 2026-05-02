@@ -139,7 +139,7 @@ app.post('/api/qpx/send-orders', async (req, res) => {
     try {
       const payload = {
         shipment_contents: order.items,
-        full_name: order.customer_name,
+        full_name: `#${order.shopify_order_number} ${order.customer_name}`,
         phone: order.phone,
         address: order.address,
         city: order.qpx_city_id,
