@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QPX Express - Shipping</title>
+  <!-- Shopify App Bridge -->
+  <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f4f6f9; color: #1a1a2e; }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    header .badge { background: #00c896; color: #fff; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 24px;
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      flex-wrap: wrap;
+    }
+    .toolbar select, .toolbar input {
+      padding: 7px 12px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .btn {
+      padding: 8px 18px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: opacity 0.2s;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1a1a2e; color: #fff; }
+    .btn-success { background: #00c896; color: #fff; }
+    .btn-outline { background: #fff; color: #1a1a2e; border: 1px solid #ccc; }
+    .btn:hover:not(:disabled) { opacity: 0.85; }
+
+    .stats {
+      display: flex;
+      gap: 12px;
+      padding: 12px 24px;
+      background: #f4f6f9;
+    }
+    .stat-card {
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 0.85rem;
+      border: 1px solid #e0e0e0;
+    }
+    .stat-card span { font-weight: 700; font-size: 1.1rem; color: #00c896; margin-left: 6px; }
+
+    .table-wrap { padding: 0 24px 24px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-top: 12px; }
+    thead { background: #1a1a2e; color: #fff; }
+    th, td { padding: 11px 14px; text-align: right; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0; }
+    th { font-weight: 600; font-size: 0.8rem; letter-spacing: 0.02em; }
+    tr:hover td { background: #f9f9f9; }
+    tr.selected td { background: #e8fff7; }
+
+    .status-badge {
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .status-sent { background: #e8fff7; color: #00a878; }
+    .status-pending { background: #fff8e1; color: #f39c12; }
+
+    .items-cell { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .serial-cell { color: #00a878; font-weight: 700; font-size: 0.8rem; }
+    .order-num { color: #1a1a2e; font-weight: 700; }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      border-radius: 8px;
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      z-index: 999;
+      display: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .toast.success { background: #00c896; }
+    .toast.error { background: #e74c3c; }
+    .toast.show { display: block; animation: fadeIn 0.3s; }
+
+    .loading {
+      text-align: center;
+      padding: 48px;
+      color: #888;
+      font-size: 1rem;
+    }
+    .loading::after {
+      content: '';
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #ccc;
+      border-top-color: #00c896;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity: 0; bottom: 10px; } to { opacity: 1; bottom: 24px; } }
+
+    .select-all-wrap { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: 600; }
+    input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: #00c896; }
+
+    .city-mismatch { background: #fff3cd; border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; color: #856404; margin-top: 2px; display: inline-block; }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px;
+      width: 90%;
+      max-width: 520px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 16px; color: #1a1a2e; }
+    .modal-result { margin-top: 16px; }
+    .result-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 0.85rem;
+    }
+    .result-row.success { background: #e8fff7; }
+    .result-row.error { background: #fdecea; }
+    .result-row .serial { font-weight: 700; color: #00a878; }
+    .result-row .err-msg { color: #e74c3c; font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🚚 Shopify × QPX Express</h1>
+  </div>
+  <div class="badge">Sun glasses Store</div>
+</header>
+
+<div class="toolbar">
+  <div class="select-all-wrap">
+    <input type="checkbox" id="selectAll" onchange="toggleSelectAll()" />
+    <label for="selectAll">تحديد الكل</label>
+  </div>
+  <button class="btn btn-success" id="sendBtn" onclick="sendSelected()" disabled>
+    📦 إرسال للشحن (<span id="selectedCount">0</span>)
+  </button>
+  <button class="btn btn-outline" onclick="loadOrders()">🔄 تحديث</button>
+  <select id="statusFilter" onchange="loadOrders()">
+    <option value="open">مفتوحة (غير مكتملة)</option>
+    <option value="any">كل الأوردرات</option>
+  </select>
+  <input type="number" id="limitInput" value="50" min="1" max="250" style="width:80px" title="عدد الأوردرات" onchange="loadOrders()" />
+</div>
+
+<div class="stats">
+  <div class="stat-card">إجمالي الأوردرات <span id="totalCount">-</span></div>
+  <div class="stat-card">تم الإرسال لـ QPX <span id="sentCount">-</span></div>
+  <div class="stat-card">في الانتظار <span id="pendingCount">-</span></div>
+</div>
+
+<div class="table-wrap">
+  <div id="loadingMsg" class="loading">جاري التحميل</div>
+  <table id="ordersTable" style="display:none">
+    <thead>
+      <tr>
+        <th style="width:36px"></th>
+        <th>#</th>
+        <th>التاريخ</th>
+        <th>العميل</th>
+        <th>الهاتف</th>
+        <th>المدينة</th>
+        <th>العنوان</th>
+        <th>المنتجات</th>
+        <th>الإجمالي</th>
+        <th>حالة QPX</th>
+      </tr>
+    </thead>
+    <tbody id="ordersBody"></tbody>
+  </table>
+</div>
+
+<!-- Results Modal -->
+<div class="modal-overlay" id="resultsModal">
+  <div class="modal">
+    <h2>📋 نتيجة الإرسال</h2>
+    <div class="modal-result" id="modalContent"></div>
+    <br/>
+    <button class="btn btn-primary" onclick="closeModal(); loadOrders()">حسناً</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let allOrders = [];
+let cities = [];
+let selectedIds = new Set();
+
+async function init() {
+  await loadCities();
+  await loadOrders();
+}
+
+async function loadCities() {
+  try {
+    const res = await fetch('/api/qpx/cities');
+    cities = await res.json();
+  } catch (e) {
+    console.error('Cities load failed:', e);
+  }
+}
+
+// English/variant → QPX Arabic city name mapping
+const CITY_MAP = {
+  // Cairo area
+  'cairo': 'قاهره', 'new cairo': 'قاهره', 'القاهرة': 'قاهره', 'القاهر': 'قاهره',
+  'heliopolis': 'قاهره', 'nasr city': 'قاهره', 'maadi': 'قاهره', 'zamalek': 'قاهره',
+  'october': 'جيزة', '6th october': 'جيزة', 'اكتوبر': 'جيزة', 'أكتوبر': 'جيزة',
+  'sheikh zayed': 'جيزة', 'شيخ زايد': 'جيزة',
+  // Alexandria
+  'alexandria': 'اسكندريه', 'الإسكندرية': 'اسكندريه', 'الاسكندرية': 'اسكندريه',
+  // Giza
+  'giza': 'جيزة', 'الجيزة': 'جيزة', 'الجيزه': 'جيزة',
+  // Qalyubia
+  'qalyubia': 'قليوبية', 'shorouk': 'قليوبية', 'الشروق': 'قليوبية',
+  'obour': 'قليوبية', 'العبور': 'قليوبية', 'badr': 'قليوبية', 'بدر': 'قليوبية',
+  // Other governorates
+  'aswan': 'اسوان', 'luxor': 'اقصر', 'qena': 'قنا', 'sohag': 'سوهاج',
+  'assiut': 'اسيوط', 'asyut': 'اسيوط', 'minya': 'منيا', 'المنيا': 'منيا',
+  'beni suef': 'بني سويف', 'fayoum': 'فيوم', 'الفيوم': 'فيوم',
+  'mansoura': 'دقهلية', 'dakahlia': 'دقهلية',
+  'tanta': 'غربيه', 'gharbia': 'غربيه',
+  'zagazig': 'شرقيه', 'sharqia': 'شرقيه',
+  'damanhour': 'البحيرة', 'beheira': 'البحيرة',
+  'kafrelsheikh': 'كفر الشيخ', 'kafr el sheikh': 'كفر الشيخ',
+  'damietta': 'دمياط', 'دمياط': 'دمياط',
+  'monufia': 'المنوفية', 'menofia': 'المنوفية',
+  'ismailia': 'اسماعيلية', 'الإسماعيلية': 'اسماعيلية',
+  'suez': 'سويس', 'السويس': 'سويس',
+  'port said': 'بورسعيد', 'بورسعيد': 'بورسعيد',
+  'hurghada': 'بحر الاحمر', 'red sea': 'بحر الاحمر',
+  'sharm': 'شرم الشيخ', 'sharm el sheikh': 'شرم الشيخ',
+  'matrouh': 'مطروح', 'marsa matrouh': 'مطروح',
+  'new valley': 'وادي جديد', 'wadi gedid': 'وادي جديد',
+  'madinat': 'مترو', 'مدينتي': 'قاهره',
+};
+
+function matchCity(shopifyCity) {
+  if (!shopifyCity) return null;
+  const key = shopifyCity.trim().toLowerCase();
+
+  // 1. Direct map lookup
+  for (const [alias, qpxName] of Object.entries(CITY_MAP)) {
+    if (key === alias || key.includes(alias) || alias.includes(key)) {
+      return cities.find(c => c.name === qpxName) || null;
+    }
+  }
+
+  // 2. Fuzzy match against QPX city names
+  return cities.find(c => {
+    const qpx = c.name.toLowerCase().replace('ه', 'ة');
+    const k = key.replace('ه', 'ة');
+    return qpx.includes(k) || k.includes(qpx);
+  }) || null;
+}
+
+async function loadOrders() {
+  const loading = document.getElementById('loadingMsg');
+  const table = document.getElementById('ordersTable');
+  loading.style.display = 'block';
+  table.style.display = 'none';
+  selectedIds.clear();
+  updateSendBtn();
+
+  try {
+    const status = document.getElementById('statusFilter').value;
+    const limit = document.getElementById('limitInput').value || 50;
+    const res = await fetch(`/api/shopify/orders?status=${status}&limit=${limit}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    allOrders = data.orders;
+    renderOrders(allOrders);
+    updateStats();
+  } catch (e) {
+    loading.textContent = '❌ خطأ في التحميل: ' + e.message;
+  }
+}
+
+function renderOrders(orders) {
+  const tbody = document.getElementById('ordersBody');
+  const loading = document.getElementById('loadingMsg');
+  const table = document.getElementById('ordersTable');
+
+  tbody.innerHTML = '';
+
+  if (!orders.length) {
+    loading.style.display = 'block';
+    loading.textContent = 'لا توجد أوردرات';
+    loading.style.animation = 'none';
+    return;
+  }
+
+  orders.forEach(o => {
+    const isSent = !!o.qpx_serial;
+    const cityMatch = matchCity(o.city);
+    const cityHint = o.city && !cityMatch
+      ? `<br/><span class="city-mismatch">⚠️ "${o.city}" غير موجودة في QPX</span>`
+      : '';
+
+    const row = document.createElement('tr');
+    row.id = `row-${o.id}`;
+    if (selectedIds.has(o.id)) row.classList.add('selected');
+
+    row.innerHTML = `
+      <td>
+        <input type="checkbox" class="order-check" data-id="${o.id}"
+          ${isSent ? 'disabled title="تم الإرسال مسبقاً"' : ''}
+          ${selectedIds.has(o.id) ? 'checked' : ''}
+          onchange="toggleSelect(${o.id})" />
+      </td>
+      <td class="order-num">#${o.shopify_order_number}</td>
+      <td>${new Date(o.created_at).toLocaleDateString('ar-EG')}</td>
+      <td>${o.customer_name || '-'}</td>
+      <td dir="ltr">${o.phone || '-'}</td>
+      <td>${o.city || '-'}${cityHint}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${o.address}">${o.address || '-'}</td>
+      <td class="items-cell" title="${o.items}">${o.items}</td>
+      <td dir="ltr">${parseFloat(o.total_price).toFixed(0)} ${o.currency}</td>
+      <td>
+        ${isSent
+          ? `<span class="status-badge status-sent">✅ <span class="serial-cell">${o.qpx_serial}</span></span>`
+          : `<span class="status-badge status-pending">⏳ لم يُرسل</span>`}
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  loading.style.display = 'none';
+  table.style.display = 'table';
+}
+
+function toggleSelect(id) {
+  const order = allOrders.find(o => o.id === id);
+  if (!order || order.qpx_serial) return;
+
+  if (selectedIds.has(id)) {
+    selectedIds.delete(id);
+    document.getElementById(`row-${id}`)?.classList.remove('selected');
+  } else {
+    selectedIds.add(id);
+    document.getElementById(`row-${id}`)?.classList.add('selected');
+  }
+  updateSendBtn();
+  updateSelectAll();
+}
+
+function toggleSelectAll() {
+  const checked = document.getElementById('selectAll').checked;
+  const unsent = allOrders.filter(o => !o.qpx_serial);
+  selectedIds.clear();
+  if (checked) unsent.forEach(o => selectedIds.add(o.id));
+
+  document.querySelectorAll('.order-check:not([disabled])').forEach(cb => {
+    cb.checked = checked;
+    const id = parseInt(cb.dataset.id);
+    document.getElementById(`row-${id}`)?.classList.toggle('selected', checked);
+  });
+  updateSendBtn();
+}
+
+function updateSelectAll() {
+  const unsent = allOrders.filter(o => !o.qpx_serial);
+  const allSelected = unsent.length > 0 && unsent.every(o => selectedIds.has(o.id));
+  document.getElementById('selectAll').checked = allSelected;
+}
+
+function updateSendBtn() {
+  const btn = document.getElementById('sendBtn');
+  const count = selectedIds.size;
+  document.getElementById('selectedCount').textContent = count;
+  btn.disabled = count === 0;
+}
+
+function updateStats() {
+  const total = allOrders.length;
+  const sent = allOrders.filter(o => o.qpx_serial).length;
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('sentCount').textContent = sent;
+  document.getElementById('pendingCount').textContent = total - sent;
+}
+
+async function sendSelected() {
+  if (!selectedIds.size) return;
+
+  const ordersToSend = allOrders
+    .filter(o => selectedIds.has(o.id))
+    .map(o => {
+      const cityMatch = matchCity(o.city);
+      return { ...o, city: cityMatch ? cityMatch.name : o.city };
+    });
+
+  const missingCity = ordersToSend.filter(o => !matchCity(o.city) && !o.city);
+  if (missingCity.length) {
+    showToast(`⚠️ ${missingCity.length} أوردر بدون مدينة`, 'error');
+  }
+
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ جاري الإرسال...';
+
+  try {
+    const res = await fetch('/api/qpx/send-orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orders: ordersToSend }),
+    });
+    const data = await res.json();
+    showResults(data.results);
+  } catch (e) {
+    showToast('❌ خطأ في الإرسال: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = `📦 إرسال للشحن (<span id="selectedCount">${selectedIds.size}</span>)`;
+  }
+}
+
+function showResults(results) {
+  const success = results.filter(r => r.status === 'success');
+  const errors = results.filter(r => r.status === 'error');
+
+  let html = '';
+  success.forEach(r => {
+    html += `<div class="result-row success">
+      <span>✅ أوردر #${r.order_number}</span>
+      <span class="serial">QPX: ${r.qpx_serial}</span>
+    </div>`;
+  });
+  errors.forEach(r => {
+    html += `<div class="result-row error">
+      <span>❌ أوردر #${r.order_number}</span>
+      <span class="err-msg">${r.error}</span>
+    </div>`;
+  });
+
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('resultsModal').classList.add('show');
+
+  if (success.length) showToast(`✅ تم إرسال ${success.length} أوردر بنجاح`, 'success');
+  if (errors.length) showToast(`❌ فشل ${errors.length} أوردر`, 'error');
+}
+
+function closeModal() {
+  document.getElementById('resultsModal').classList.remove('show');
+}
+
+function showToast(msg, type = 'success') {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = `toast ${type} show`;
+  setTimeout(() => toast.classList.remove('show'), 4000);
+}
+
+// ─── Shopify App Bridge Init ─────────────────────────────────────────────────
+(function initAppBridge() {
+  const params = new URLSearchParams(window.location.search);
+  const host = params.get('host');
+  const apiKey = params.get('apiKey') || window.__SHOPIFY_API_KEY__;
+  if (host && apiKey && window['app-bridge']) {
+    const AppBridge = window['app-bridge'];
+    const app = AppBridge.createApp({ apiKey, host, forceRedirect: true });
+    window.__shopifyApp = app;
+  }
+})();
+
+init();
+</script>
+</body>
+</html>
