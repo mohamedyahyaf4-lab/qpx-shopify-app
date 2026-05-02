@@ -22,15 +22,20 @@ app.use((req, res, next) => {
 // Serve Vite production build
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// SPA fallback — all non-API routes → index.html
+// SPA fallback — inject Shopify API key then serve index.html
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   const indexPath = path.join(__dirname, 'dist', 'index.html');
-  if (require('fs').existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.status(503).send('جاري التحميل... شغّل npm run build أولاً');
+  const fs = require('fs');
+  if (!fs.existsSync(indexPath)) {
+    return res.status(503).send('شغّل npm run build أولاً');
   }
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const injected = html.replace(
+    '</head>',
+    `<script>window.__SHOPIFY_API_KEY__ = "${process.env.SHOPIFY_API_KEY || ''}";</script>\n</head>`
+  );
+  res.send(injected);
 });
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;

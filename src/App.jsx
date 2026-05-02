@@ -142,6 +142,30 @@ export default function App() {
 
   // ─── Data Loading ───────────────────────────────────────────────────────────
 
+  // ─── App Bridge Init (signals Shopify mobile "app is ready") ─────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const host = params.get('host');
+    const apiKey = window.__SHOPIFY_API_KEY__ || params.get('apiKey');
+    if (!host || !apiKey) return;
+
+    const init = () => {
+      const AB = window['app-bridge'];
+      if (AB && !window.__shopifyApp) {
+        window.__shopifyApp = AB.createApp({ apiKey, host, forceRedirect: false });
+      }
+    };
+
+    if (window['app-bridge']) {
+      init();
+    } else {
+      // CDN script still loading — wait for it
+      const script = document.querySelector('script[src*="app-bridge"]');
+      if (script) script.addEventListener('load', init);
+    }
+  }, []);
+
+  // ─── Data Loading ─────────────────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/qpx/cities')
       .then((r) => r.json())
