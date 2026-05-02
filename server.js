@@ -33,7 +33,10 @@ app.get('*', (req, res, next) => {
   const html = fs.readFileSync(indexPath, 'utf8');
   const injected = html.replace(
     '</head>',
-    `<script>window.__SHOPIFY_API_KEY__ = "${process.env.SHOPIFY_API_KEY || ''}";</script>\n</head>`
+    `<script>
+      window.__SHOPIFY_API_KEY__ = "${process.env.SHOPIFY_API_KEY || ''}";
+      window.__STORE_NAME__ = "${process.env.STORE_NAME || 'My Store'}";
+    </script>\n</head>`
   );
   res.send(injected);
 });

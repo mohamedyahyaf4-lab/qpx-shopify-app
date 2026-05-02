@@ -115,6 +115,8 @@ function formatError(raw) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+const STORE_NAME = window.__STORE_NAME__ || 'My Store';
+
 export default function App() {
   const [orders, setOrders] = useState([]);
   const [cities, setCities] = useState([]);
@@ -371,7 +373,7 @@ export default function App() {
         />
       )}
 
-      <Page title="🚚 QPX Express" subtitle="Sun glasses Store — لوحة الشحن">
+      <Page title="🚚 QPX Express" subtitle={`${STORE_NAME} — لوحة الشحن`}>
 
         <BlockStack gap="500">
 
