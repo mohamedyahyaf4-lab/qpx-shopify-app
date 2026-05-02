@@ -508,7 +508,8 @@ function showToast(msg, type = 'success') {
   const apiKey = params.get('apiKey') || window.__SHOPIFY_API_KEY__;
   if (host && apiKey && window['app-bridge']) {
     const AppBridge = window['app-bridge'];
-    const app = AppBridge.createApp({ apiKey, host, forceRedirect: true });
+    // forceRedirect:false prevents redirect loops in the Shopify mobile app
+    const app = AppBridge.createApp({ apiKey, host, forceRedirect: false });
     window.__shopifyApp = app;
   }
 })();
