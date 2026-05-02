@@ -19,18 +19,18 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve Vite production build
+app.use(express.static(path.join(__dirname, 'dist')));
 
-// Inject Shopify API key into the page so App Bridge can initialize
-app.get('/', (req, res) => {
-  const html = require('fs').readFileSync(
-    path.join(__dirname, 'public', 'index.html'), 'utf8'
-  );
-  const injected = html.replace(
-    '</head>',
-    `<script>window.__SHOPIFY_API_KEY__ = "${process.env.SHOPIFY_API_KEY || ''}";</script>\n</head>`
-  );
-  res.send(injected);
+// SPA fallback — all non-API routes → index.html
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  if (require('fs').existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(503).send('جاري التحميل... شغّل npm run build أولاً');
+  }
 });
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;

@@ -1,0 +1,486 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Frame,
+  Page,
+  Card,
+  Layout,
+  IndexTable,
+  useIndexResourceState,
+  Badge,
+  Button,
+  InlineStack,
+  BlockStack,
+  Box,
+  Text,
+  Select,
+  TextField,
+  Toast,
+  Modal,
+  Banner,
+  Spinner,
+  Divider,
+  Tooltip,
+} from '@shopify/polaris';
+
+// ─── City / Governorate Matching ─────────────────────────────────────────────
+
+const CITY_MAP = {
+  // Cairo
+  'cairo': 'قاهره', 'القاهرة': 'قاهره', 'القاهره': 'قاهره', 'القاهر': 'قاهره',
+  // Alexandria
+  'alexandria': 'اسكندريه', 'الإسكندرية': 'اسكندريه', 'الاسكندريه': 'اسكندريه',
+  // Giza (includes 6th of October & Sheikh Zayed)
+  'giza': 'جيزة', 'الجيزة': 'جيزة', 'الجيزه': 'جيزة',
+  '6th of october': 'جيزة', '6 october': 'جيزة', 'october': 'جيزة',
+  'sixth of october': 'جيزة', 'اكتوبر': 'جيزة', 'أكتوبر': 'جيزة',
+  // Qalyubia
+  'qalyubia': 'قليوبية', 'القليوبية': 'قليوبية',
+  // Monufia
+  'monufia': 'المنوفية', 'menofia': 'المنوفية', 'المنوفية': 'المنوفية',
+  // Beheira
+  'beheira': 'البحيرة', 'البحيرة': 'البحيرة',
+  // Gharbia
+  'gharbia': 'غربيه', 'الغربية': 'غربيه',
+  // Sharqia
+  'sharqia': 'شرقيه', 'الشرقية': 'شرقيه',
+  // Dakahlia
+  'dakahlia': 'دقهلية', 'الدقهلية': 'دقهلية',
+  // Damietta
+  'damietta': 'دمياط', 'دمياط': 'دمياط',
+  // Kafr el-Sheikh
+  'kafr el sheikh': 'كفر الشيخ', 'kafr el-sheikh': 'كفر الشيخ', 'كفر الشيخ': 'كفر الشيخ',
+  // Ismailia
+  'ismailia': 'اسماعيلية', 'الإسماعيلية': 'اسماعيلية',
+  // Port Said
+  'port said': 'بورسعيد', 'بورسعيد': 'بورسعيد',
+  // Suez
+  'suez': 'سويس', 'السويس': 'سويس',
+  // Fayoum
+  'fayoum': 'فيوم', 'الفيوم': 'فيوم',
+  // Beni Suef
+  'beni suef': 'بني سويف', 'بني سويف': 'بني سويف',
+  // Minya
+  'minya': 'منيا', 'المنيا': 'منيا',
+  // Asyut
+  'asyut': 'اسيوط', 'assiut': 'اسيوط', 'أسيوط': 'اسيوط',
+  // Sohag
+  'sohag': 'سوهاج', 'سوهاج': 'سوهاج',
+  // Qena
+  'qena': 'قنا', 'قنا': 'قنا',
+  // Luxor
+  'luxor': 'اقصر', 'الأقصر': 'اقصر',
+  // Aswan
+  'aswan': 'اسوان', 'أسوان': 'اسوان',
+  // Red Sea
+  'red sea': 'بحر الاحمر', 'البحر الأحمر': 'بحر الاحمر',
+  // South Sinai
+  'south sinai': 'جنوب سيناء', 'جنوب سيناء': 'جنوب سيناء',
+  'sharm el sheikh': 'جنوب سيناء', 'sharm': 'جنوب سيناء',
+  // Matrouh
+  'matrouh': 'مطروح', 'مطروح': 'مطروح',
+  // New Valley
+  'new valley': 'وادي جديد', 'الوادي الجديد': 'وادي جديد',
+};
+
+function matchCity(province, cities) {
+  if (!province || !cities.length) return null;
+  const key = province.trim().toLowerCase();
+  for (const [alias, qpxName] of Object.entries(CITY_MAP)) {
+    if (key === alias || key.includes(alias) || alias.includes(key)) {
+      return cities.find((c) => c.name === qpxName) || null;
+    }
+  }
+  return (
+    cities.find((c) => {
+      const qpx = c.name.toLowerCase().replace(/ه/g, 'ة');
+      const k = key.replace(/ه/g, 'ة');
+      return qpx.includes(k) || k.includes(qpx);
+    }) || null
+  );
+}
+
+function formatError(raw) {
+  try {
+    if (raw.includes('<!DOCTYPE') || raw.includes('<html')) return 'خطأ من خادم الشحن';
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'string') return parsed.substring(0, 120);
+    return Object.entries(parsed)
+      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v[0] : v}`)
+      .join(' | ')
+      .substring(0, 120);
+  } catch {
+    return String(raw).substring(0, 120);
+  }
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export default function App() {
+  const [orders, setOrders] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('open');
+  const [limitValue, setLimitValue] = useState('50');
+  const [sending, setSending] = useState(false);
+  const [toast, setToast] = useState({ active: false, message: '', error: false });
+  const [resultsModal, setResultsModal] = useState({ active: false, results: [] });
+
+  const resourceName = { singular: 'أوردر', plural: 'أوردرات' };
+
+  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } =
+    useIndexResourceState(orders.map((o) => ({ id: String(o.id) })));
+
+  const sentCount = useMemo(() => orders.filter((o) => o.qpx_serial).length, [orders]);
+  const pendingCount = orders.length - sentCount;
+
+  const selectedUnsentOrders = useMemo(
+    () => orders.filter((o) => selectedResources.includes(String(o.id)) && !o.qpx_serial),
+    [orders, selectedResources]
+  );
+
+  // ─── Data Loading ───────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetch('/api/qpx/cities')
+      .then((r) => r.json())
+      .then(setCities)
+      .catch(console.error);
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    clearSelection();
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch(
+        `/api/shopify/orders?status=${statusFilter}&limit=${limitValue}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timer);
+      const data = await res.json();
+      if (data.error) throw new Error(JSON.stringify(data.error));
+      setOrders(data.orders);
+    } catch (e) {
+      setLoadError(e.name === 'AbortError' ? 'انتهت مهلة الاتصال، تحقق من الإنترنت' : e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, limitValue]);
+
+  useEffect(() => {
+    loadOrders();
+  }, [loadOrders]);
+
+  // ─── Send Orders ────────────────────────────────────────────────────────────
+
+  const sendSelected = useCallback(async () => {
+    if (!selectedUnsentOrders.length) return;
+
+    const ordersWithCity = selectedUnsentOrders.map((o) => {
+      const cityMatch = matchCity(o.city, cities);
+      return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
+    });
+
+    const missingCity = ordersWithCity.filter((o) => !o.qpx_city_id);
+    if (missingCity.length) {
+      showToast(`⚠️ ${missingCity.length} أوردر بدون محافظة معروفة — لن يُرسل`, true);
+      return;
+    }
+
+    setSending(true);
+    try {
+      const res = await fetch('/api/qpx/send-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders: ordersWithCity }),
+      });
+      const data = await res.json();
+      setResultsModal({ active: true, results: data.results });
+    } catch (e) {
+      showToast('❌ خطأ في الإرسال: ' + e.message, true);
+    } finally {
+      setSending(false);
+    }
+  }, [selectedUnsentOrders, cities]);
+
+  const closeResultsModal = useCallback(() => {
+    setResultsModal({ active: false, results: [] });
+    loadOrders();
+  }, [loadOrders]);
+
+  function showToast(message, isError = false) {
+    setToast({ active: true, message, error: isError });
+  }
+
+  // ─── Table Rows ─────────────────────────────────────────────────────────────
+
+  const rowMarkup = orders.map((order, index) => {
+    const isSent = !!order.qpx_serial;
+    const cityMatch = matchCity(order.city, cities);
+    const hasCity = !!cityMatch;
+
+    return (
+      <IndexTable.Row
+        id={String(order.id)}
+        key={order.id}
+        selected={selectedResources.includes(String(order.id))}
+        position={index}
+        disabled={isSent}
+        tone={isSent ? 'subdued' : undefined}
+      >
+        {/* Order # */}
+        <IndexTable.Cell>
+          <Text as="span" variant="bodyMd" fontWeight="semibold">
+            #{order.shopify_order_number}
+          </Text>
+        </IndexTable.Cell>
+
+        {/* Date */}
+        <IndexTable.Cell>
+          <Text as="span" variant="bodyMd" tone="subdued">
+            {new Date(order.created_at).toLocaleDateString('ar-EG')}
+          </Text>
+        </IndexTable.Cell>
+
+        {/* Customer */}
+        <IndexTable.Cell>
+          <Text as="span" variant="bodyMd">{order.customer_name || '—'}</Text>
+        </IndexTable.Cell>
+
+        {/* Phone */}
+        <IndexTable.Cell>
+          <Text as="span" variant="bodyMd">{order.phone || '—'}</Text>
+        </IndexTable.Cell>
+
+        {/* Governorate */}
+        <IndexTable.Cell>
+          {order.city ? (
+            <InlineStack gap="100" blockAlign="center">
+              <Text as="span" variant="bodyMd">{order.city}</Text>
+              {!hasCity && (
+                <Tooltip content="هذه المحافظة غير موجودة في قائمة QPX">
+                  <Badge tone="warning">⚠️ غير معروفة</Badge>
+                </Tooltip>
+              )}
+            </InlineStack>
+          ) : (
+            <Badge tone="critical">غير محددة</Badge>
+          )}
+        </IndexTable.Cell>
+
+        {/* Items */}
+        <IndexTable.Cell>
+          <Tooltip content={order.items}>
+            <Text as="span" variant="bodyMd" truncate>
+              {order.items.length > 40 ? order.items.substring(0, 40) + '…' : order.items}
+            </Text>
+          </Tooltip>
+        </IndexTable.Cell>
+
+        {/* Total */}
+        <IndexTable.Cell>
+          <Text as="span" variant="bodyMd" fontWeight="semibold">
+            {parseFloat(order.total_price).toFixed(0)} {order.currency}
+          </Text>
+        </IndexTable.Cell>
+
+        {/* QPX Status */}
+        <IndexTable.Cell>
+          {isSent ? (
+            <Badge tone="success">✅ {order.qpx_serial}</Badge>
+          ) : (
+            <Badge tone="attention">⏳ لم يُرسل</Badge>
+          )}
+        </IndexTable.Cell>
+      </IndexTable.Row>
+    );
+  });
+
+  // ─── Results Modal Content ───────────────────────────────────────────────────
+
+  const successResults = resultsModal.results.filter((r) => r.status === 'success');
+  const errorResults = resultsModal.results.filter((r) => r.status === 'error');
+
+  // ─── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <Frame>
+      {/* Toast */}
+      {toast.active && (
+        <Toast
+          content={toast.message}
+          error={toast.error}
+          onDismiss={() => setToast((t) => ({ ...t, active: false }))}
+          duration={5000}
+        />
+      )}
+
+      <Page title="🚚 QPX Express" subtitle="Sun glasses Store — لوحة الشحن">
+
+        <BlockStack gap="500">
+
+          {/* ── Stats ── */}
+          <Layout>
+            <Layout.Section variant="oneThird">
+              <Card>
+                <BlockStack gap="100">
+                  <Text variant="bodySm" tone="subdued">إجمالي الأوردرات</Text>
+                  <Text variant="heading2xl" as="p">{loading ? '—' : orders.length}</Text>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+            <Layout.Section variant="oneThird">
+              <Card>
+                <BlockStack gap="100">
+                  <Text variant="bodySm" tone="subdued">تم الإرسال لـ QPX</Text>
+                  <Text variant="heading2xl" as="p" tone="success">{loading ? '—' : sentCount}</Text>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+            <Layout.Section variant="oneThird">
+              <Card>
+                <BlockStack gap="100">
+                  <Text variant="bodySm" tone="subdued">في الانتظار</Text>
+                  <Text variant="heading2xl" as="p">{loading ? '—' : pendingCount}</Text>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+          </Layout>
+
+          {/* ── Filters + Actions ── */}
+          <Card>
+            <InlineStack gap="300" blockAlign="end" wrap>
+              <div style={{ minWidth: 200 }}>
+                <Select
+                  label="حالة الأوردرات"
+                  options={[
+                    { label: 'مفتوحة (غير مكتملة)', value: 'open' },
+                    { label: 'كل الأوردرات', value: 'any' },
+                  ]}
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                />
+              </div>
+              <div style={{ width: 100 }}>
+                <TextField
+                  label="عدد"
+                  type="number"
+                  value={limitValue}
+                  onChange={setLimitValue}
+                  min={1}
+                  max={250}
+                  autoComplete="off"
+                />
+              </div>
+              <Button onClick={loadOrders} loading={loading && orders.length > 0}>
+                🔄 تحديث
+              </Button>
+              {selectedUnsentOrders.length > 0 && (
+                <Button
+                  variant="primary"
+                  onClick={sendSelected}
+                  loading={sending}
+                  disabled={sending}
+                >
+                  📦 إرسال للشحن ({selectedUnsentOrders.length})
+                </Button>
+              )}
+            </InlineStack>
+          </Card>
+
+          {/* ── Error Banner ── */}
+          {loadError && (
+            <Banner tone="critical" title="خطأ في تحميل الأوردرات" onDismiss={() => setLoadError(null)}>
+              <p>{loadError}</p>
+            </Banner>
+          )}
+
+          {/* ── Orders Table ── */}
+          <Card padding="0">
+            {loading && orders.length === 0 ? (
+              <Box padding="1600">
+                <BlockStack align="center" inlineAlign="center" gap="400">
+                  <Spinner size="large" />
+                  <Text tone="subdued">جاري تحميل الأوردرات...</Text>
+                </BlockStack>
+              </Box>
+            ) : (
+              <IndexTable
+                resourceName={resourceName}
+                itemCount={orders.length}
+                selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+                onSelectionChange={handleSelectionChange}
+                headings={[
+                  { title: '#' },
+                  { title: 'التاريخ' },
+                  { title: 'العميل' },
+                  { title: 'الهاتف' },
+                  { title: 'المحافظة' },
+                  { title: 'المنتجات' },
+                  { title: 'الإجمالي' },
+                  { title: 'حالة QPX' },
+                ]}
+                emptyState={
+                  <Box padding="1600">
+                    <BlockStack align="center" inlineAlign="center" gap="300">
+                      <Text tone="subdued" variant="bodyLg">لا توجد أوردرات</Text>
+                    </BlockStack>
+                  </Box>
+                }
+              >
+                {rowMarkup}
+              </IndexTable>
+            )}
+          </Card>
+
+        </BlockStack>
+      </Page>
+
+      {/* ── Results Modal ── */}
+      <Modal
+        open={resultsModal.active}
+        onClose={closeResultsModal}
+        title="📋 نتيجة الإرسال"
+        primaryAction={{ content: 'حسناً', onAction: closeResultsModal }}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            {successResults.length > 0 && (
+              <BlockStack gap="200">
+                <Text variant="headingSm" tone="success">
+                  ✅ تم إرسال {successResults.length} أوردر بنجاح
+                </Text>
+                {successResults.map((r) => (
+                  <InlineStack key={r.shopify_id} align="space-between" blockAlign="center">
+                    <Text>أوردر #{r.order_number}</Text>
+                    <Badge tone="success">QPX: {r.qpx_serial}</Badge>
+                  </InlineStack>
+                ))}
+              </BlockStack>
+            )}
+
+            {successResults.length > 0 && errorResults.length > 0 && <Divider />}
+
+            {errorResults.length > 0 && (
+              <BlockStack gap="200">
+                <Text variant="headingSm" tone="critical">
+                  ❌ فشل {errorResults.length} أوردر
+                </Text>
+                {errorResults.map((r) => (
+                  <InlineStack key={r.shopify_id} align="space-between" blockAlign="center">
+                    <Text>أوردر #{r.order_number}</Text>
+                    <Badge tone="critical">{formatError(r.error)}</Badge>
+                  </InlineStack>
+                ))}
+              </BlockStack>
+            )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+    </Frame>
+  );
+}
