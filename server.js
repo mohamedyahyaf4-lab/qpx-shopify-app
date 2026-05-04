@@ -36,6 +36,17 @@ app.get('*', (req, res, next) => {
     `<script>
       window.__SHOPIFY_API_KEY__ = "${process.env.SHOPIFY_API_KEY || ''}";
       window.__STORE_NAME__ = "${process.env.STORE_NAME || 'My Store'}";
+      // Initialize App Bridge immediately (before React) so Shopify mobile gets the ready signal ASAP
+      (function() {
+        try {
+          var p = new URLSearchParams(location.search);
+          var host = p.get('host');
+          var key = window.__SHOPIFY_API_KEY__;
+          if (host && key && window['app-bridge'] && !window.__shopifyApp) {
+            window.__shopifyApp = window['app-bridge'].createApp({ apiKey: key, host: host, forceRedirect: false });
+          }
+        } catch(e) {}
+      })();
     </script>\n</head>`
   );
   res.send(injected);
