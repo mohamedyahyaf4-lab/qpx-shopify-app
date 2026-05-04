@@ -297,6 +297,19 @@ export default function App() {
           <Text as="span" variant="bodyMd">{order.phone || '—'}</Text>
         </IndexTable.Cell>
 
+        {/* Address */}
+        <IndexTable.Cell>
+          {order.address_full ? (
+            <Tooltip content={order.address_full}>
+              <Text as="span" variant="bodyMd">
+                {order.address_full.length > 35 ? order.address_full.substring(0, 35) + '…' : order.address_full}
+              </Text>
+            </Tooltip>
+          ) : (
+            <Text as="span" tone="subdued">—</Text>
+          )}
+        </IndexTable.Cell>
+
         {/* Governorate */}
         <IndexTable.Cell>
           {order.city ? (
@@ -473,6 +486,7 @@ export default function App() {
                   { title: 'التاريخ' },
                   { title: 'العميل' },
                   { title: 'الهاتف' },
+                  { title: 'العنوان' },
                   { title: 'المحافظة' },
                   { title: 'المنتجات' },
                   { title: 'الإجمالي' },

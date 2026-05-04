@@ -1,0 +1,18 @@
+{
+  "_instructions": "املأ البيانات دي وابعت الملف لـ Claude وهيعمل كل الإعداد أوتوماتيك",
+
+  "store_name": "اسم المتجر اللي هيظهر في التطبيق",
+
+  "shopify": {
+    "_note": "هتلاقيها في Shopify Admin → Settings → Apps → Develop apps → اختار التطبيق → API credentials",
+    "store_url": "yourstore.myshopify.com",
+    "api_key": "",
+    "access_token": ""
+  },
+
+  "qpx": {
+    "_note": "بيانات تسجيل الدخول في موقع QPX Express",
+    "username": "",
+    "password": ""
+  }
+}
