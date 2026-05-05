@@ -160,7 +160,7 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         full_name: `${order.customer_name} #${order.shopify_order_number}`,
         phone: order.phone,
         address: order.address_full || order.address,
-        city: order.qpx_city_id,
+        ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
         customer: QPX_CUSTOMER_ID,
         total_amount: parseFloat(order.total_price) || 0,
         notes: `Shopify Order #${order.shopify_order_number}`,

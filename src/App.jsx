@@ -212,12 +212,6 @@ export default function App() {
       return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
     });
 
-    const missingCity = ordersWithCity.filter((o) => !o.qpx_city_id);
-    if (missingCity.length) {
-      showToast(`⚠️ ${missingCity.length} أوردر بدون محافظة معروفة — لن يُرسل`, true);
-      return;
-    }
-
     setSending(true);
     try {
       const res = await fetch('/api/qpx/send-orders', {
@@ -312,18 +306,7 @@ export default function App() {
 
         {/* Governorate */}
         <IndexTable.Cell>
-          {order.city ? (
-            <InlineStack gap="100" blockAlign="center">
-              <Text as="span" variant="bodyMd">{order.city}</Text>
-              {!hasCity && (
-                <Tooltip content="هذه المحافظة غير موجودة في قائمة QPX">
-                  <Badge tone="warning">⚠️ غير معروفة</Badge>
-                </Tooltip>
-              )}
-            </InlineStack>
-          ) : (
-            <Badge tone="critical">غير محددة</Badge>
-          )}
+          <Text as="span" variant="bodyMd">{order.city || '—'}</Text>
         </IndexTable.Cell>
 
         {/* Items */}
