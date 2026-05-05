@@ -208,7 +208,8 @@ export default function App() {
     if (!selectedUnsentOrders.length) return;
 
     const ordersWithCity = selectedUnsentOrders.map((o) => {
-      const cityMatch = matchCity(o.city, cities);
+      // Try city first (e.g. "Alexandria"), fallback to province (e.g. "Alexandria Governorate")
+      const cityMatch = matchCity(o.city, cities) || matchCity(o.province, cities);
       return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
     });
 
@@ -255,8 +256,8 @@ export default function App() {
 
   const rowMarkup = orders.map((order, index) => {
     const isSent = !!order.qpx_serial;
-    const cityMatch = matchCity(order.city, cities);
-    const hasCity = !!cityMatch;
+    const cityMatch = matchCity(order.city, cities) || matchCity(order.province, cities);
+    const displayCity = order.city || order.province || '—';
 
     return (
       <IndexTable.Row
@@ -306,7 +307,9 @@ export default function App() {
 
         {/* Governorate */}
         <IndexTable.Cell>
-          <Text as="span" variant="bodyMd">{order.city || '—'}</Text>
+          <Tooltip content={cityMatch ? `QPX: ${cityMatch.name}` : 'غير معروفة في QPX'}>
+            <Text as="span" variant="bodyMd">{displayCity}</Text>
+          </Tooltip>
         </IndexTable.Cell>
 
         {/* Items */}
