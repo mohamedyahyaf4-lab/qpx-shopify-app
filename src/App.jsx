@@ -209,10 +209,13 @@ export default function App() {
     if (isSendingRef.current || !selectedUnsentOrders.length) return;
     isSendingRef.current = true;
 
-    const ordersWithCity = selectedUnsentOrders.map((o) => {
-      const cityMatch = matchCity(o.city, cities);
-      return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
-    });
+    const ordersWithCity = selectedUnsentOrders
+      .slice()
+      .sort((a, b) => a.shopify_order_number - b.shopify_order_number)
+      .map((o) => {
+        const cityMatch = matchCity(o.city, cities);
+        return { ...o, qpx_city_id: cityMatch ? cityMatch.id : null };
+      });
 
     setSending(true);
     try {
