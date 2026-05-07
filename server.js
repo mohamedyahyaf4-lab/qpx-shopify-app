@@ -154,6 +154,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
   const results = [];
 
   for (const order of orders) {
+    // Skip if already sent (has qpx_serial) — prevents duplicate submissions
+    if (order.qpx_serial) {
+      results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'skipped', qpx_serial: order.qpx_serial });
+      continue;
+    }
     try {
       const payload = {
         shipment_contents: order.items,

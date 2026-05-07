@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Frame,
   Page,
@@ -125,6 +125,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('open');
   const [limitValue, setLimitValue] = useState('50');
   const [sending, setSending] = useState(false);
+  const isSendingRef = useRef(false);
   const [clearingId, setClearingId] = useState(null);
   const [toast, setToast] = useState({ active: false, message: '', error: false });
   const [resultsModal, setResultsModal] = useState({ active: false, results: [] });
@@ -205,7 +206,8 @@ export default function App() {
   // ─── Send Orders ────────────────────────────────────────────────────────────
 
   const sendSelected = useCallback(async () => {
-    if (!selectedUnsentOrders.length) return;
+    if (isSendingRef.current || !selectedUnsentOrders.length) return;
+    isSendingRef.current = true;
 
     const ordersWithCity = selectedUnsentOrders.map((o) => {
       const cityMatch = matchCity(o.city, cities);
@@ -224,6 +226,7 @@ export default function App() {
     } catch (e) {
       showToast('❌ خطأ في الإرسال: ' + e.message, true);
     } finally {
+      isSendingRef.current = false;
       setSending(false);
     }
   }, [selectedUnsentOrders, cities]);
