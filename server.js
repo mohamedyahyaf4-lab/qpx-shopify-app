@@ -63,13 +63,34 @@ let qpxRefreshToken = process.env.QPX_REFRESH_TOKEN;
 // ─── QPX Auth ───────────────────────────────────────────────────────────────
 
 async function getQpxToken() {
+  // Return cached access token if still valid
   if (qpxToken && Date.now() < qpxTokenExpiry) return qpxToken;
-  const res = await axios.post(`${QPX_BASE}/api/token/refresh/`, {
-    refresh: qpxRefreshToken,
+
+  // Try refresh token first
+  if (qpxRefreshToken) {
+    try {
+      const res = await axios.post(`${QPX_BASE}/api/token/refresh/`, {
+        refresh: qpxRefreshToken,
+      }, { timeout: 15000 });
+      qpxToken = res.data.access;
+      qpxTokenExpiry = Date.now() + 25 * 60 * 1000;
+      console.log('QPX token refreshed successfully');
+      return qpxToken;
+    } catch (err) {
+      console.warn('QPX refresh token expired or invalid, logging in with credentials...');
+    }
+  }
+
+  // Fallback: login with username + password to get fresh tokens
+  const loginRes = await axios.post(`${QPX_BASE}/api/token/`, {
+    username: process.env.QPX_USERNAME,
+    password: process.env.QPX_PASSWORD,
   }, { timeout: 15000 });
-  qpxToken = res.data.access;
-  // Access tokens expire in ~30min, refresh after 25min
+
+  qpxToken = loginRes.data.access;
+  qpxRefreshToken = loginRes.data.refresh; // update in-memory refresh token
   qpxTokenExpiry = Date.now() + 25 * 60 * 1000;
+  console.log('QPX login successful, new tokens obtained');
   return qpxToken;
 }
 
