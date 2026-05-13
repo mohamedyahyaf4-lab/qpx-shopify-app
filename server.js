@@ -136,6 +136,7 @@ app.get('/api/qpx/cities', async (req, res) => {
     const token = await getQpxToken();
     const response = await axios.get(`${QPX_BASE}/locations/city/`, {
       headers: qpxHeaders(token),
+      timeout: 15000,
     });
     res.json(response.data);
   } catch (err) {
@@ -147,10 +148,17 @@ app.get('/api/qpx/cities', async (req, res) => {
 // ─── QPX: Send Orders ────────────────────────────────────────────────────────
 
 app.post('/api/qpx/send-orders', async (req, res) => {
-  const { orders } = req.body; // array of order objects
+  const { orders } = req.body;
   if (!orders || !orders.length) return res.status(400).json({ error: 'No orders provided' });
 
-  const token = await getQpxToken();
+  let token;
+  try {
+    token = await getQpxToken();
+  } catch (err) {
+    console.error('QPX token error:', err.response?.data || err.message);
+    return res.status(502).json({ error: 'فشل في الاتصال بشركة الشحن: ' + (err.response?.data?.detail || err.message) });
+  }
+
   const results = [];
 
   for (const order of orders) {
@@ -180,7 +188,6 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       console.log(`QPX response for #${order.shopify_order_number}:`, JSON.stringify(qpxRes.data));
       const serial = qpxRes.data?.serial || qpxRes.data?.id;
 
-      // Save QPX serial as note_attribute on Shopify order
       if (serial) {
         await saveQpxSerialToShopify(order.id, order.shopify_order_number, serial);
       }
