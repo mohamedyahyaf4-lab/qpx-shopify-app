@@ -66,7 +66,7 @@ async function getQpxToken() {
   if (qpxToken && Date.now() < qpxTokenExpiry) return qpxToken;
   const res = await axios.post(`${QPX_BASE}/api/token/refresh/`, {
     refresh: qpxRefreshToken,
-  });
+  }, { timeout: 15000 });
   qpxToken = res.data.access;
   // Access tokens expire in ~30min, refresh after 25min
   qpxTokenExpiry = Date.now() + 25 * 60 * 1000;
@@ -174,8 +174,10 @@ app.post('/api/qpx/send-orders', async (req, res) => {
 
       const qpxRes = await axios.post(`${QPX_BASE}/addorders/order/`, payload, {
         headers: qpxHeaders(token),
+        timeout: 20000,
       });
 
+      console.log(`QPX response for #${order.shopify_order_number}:`, JSON.stringify(qpxRes.data));
       const serial = qpxRes.data?.serial || qpxRes.data?.id;
 
       // Save QPX serial as note_attribute on Shopify order

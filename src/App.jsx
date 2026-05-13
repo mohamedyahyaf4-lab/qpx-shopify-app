@@ -219,15 +219,21 @@ export default function App() {
 
     setSending(true);
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60000); // 60s timeout
       const res = await fetch('/api/qpx/send-orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orders: ordersWithCity }),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();
       setResultsModal({ active: true, results: data.results });
     } catch (e) {
-      showToast('❌ خطأ في الإرسال: ' + e.message, true);
+      const msg = e.name === 'AbortError' ? 'انتهت مهلة الإرسال (60 ثانية)، حاول مرة أخرى' : e.message;
+      showToast('❌ ' + msg, true);
     } finally {
       isSendingRef.current = false;
       setSending(false);
