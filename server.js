@@ -103,7 +103,9 @@ function qpxHeaders(token) {
 app.get('/api/shopify/orders', async (req, res) => {
   try {
     const { limit = 50, status = 'open', page_info } = req.query;
-    let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${limit}&status=${status === 'any' ? 'any' : 'open'}`;
+    // Use status=any by default to include paid/closed orders (e.g. Visa payments)
+    const orderStatus = (status === 'open' || status === 'closed') ? status : 'any';
+    let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${limit}&status=${orderStatus}`;
     if (page_info) url += `&page_info=${page_info}`;
 
     const response = await axios.get(url, {

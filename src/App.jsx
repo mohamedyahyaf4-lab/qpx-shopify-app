@@ -122,7 +122,7 @@ export default function App() {
   const [cities, setCities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('open');
+  const [statusFilter, setStatusFilter] = useState('any');
   const [limitValue, setLimitValue] = useState('50');
   const [sending, setSending] = useState(false);
   const isSendingRef = useRef(false);
@@ -419,8 +419,9 @@ export default function App() {
                 <Select
                   label="حالة الأوردرات"
                   options={[
-                    { label: 'مفتوحة (غير مكتملة)', value: 'open' },
                     { label: 'كل الأوردرات', value: 'any' },
+                    { label: 'مفتوحة فقط', value: 'open' },
+                    { label: 'مغلقة / مكتملة', value: 'closed' },
                   ]}
                   value={statusFilter}
                   onChange={setStatusFilter}
