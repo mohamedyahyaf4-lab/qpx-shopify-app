@@ -147,8 +147,10 @@ app.get('/api/shopify/orders', async (req, res) => {
     while (allOrders.length < totalLimit) {
       const remaining = totalLimit - allOrders.length;
       const pageSize = Math.min(remaining, PAGE_SIZE);
-      let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&status=${orderStatus}`;
-      if (!firstPage && nextPage) url += `&page_info=${nextPage}`;
+      // When using page_info, Shopify forbids passing status — only limit + page_info allowed
+      let url = firstPage
+        ? `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&status=${orderStatus}`
+        : `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&page_info=${nextPage}`;
       firstPage = false;
 
       const response = await axios.get(url, { headers: shopifyHeaders });
