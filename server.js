@@ -100,52 +100,69 @@ function qpxHeaders(token) {
 
 // ─── Shopify: Get Orders ─────────────────────────────────────────────────────
 
+function mapShopifyOrder(o) {
+  const addr = o.shipping_address || o.billing_address || {};
+  const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
+  return {
+    id: o.id,
+    shopify_order_number: o.order_number,
+    created_at: o.created_at,
+    customer_name: `${addr.first_name || ''} ${addr.last_name || ''}`.trim() || o.contact_email,
+    phone: addr.phone || o.phone || '',
+    city: addr.province || addr.city || '',
+    address: [addr.address1, addr.address2].filter(Boolean).join('، '),
+    address_full: [addr.address1, addr.address2, addr.city, addr.province, addr.zip].filter(Boolean).join('، '),
+    items,
+    total_price: o.total_price,
+    currency: o.currency,
+    financial_status: o.financial_status,
+    fulfillment_status: o.fulfillment_status || 'unfulfilled',
+    qpx_serial: o.note_attributes?.find((n) => n.name === 'qpx_serial')?.value || null,
+  };
+}
+
 app.get('/api/shopify/orders', async (req, res) => {
   try {
     const { limit = 50, status = 'open', page_info } = req.query;
-    // Use status=any by default to include paid/closed orders (e.g. Visa payments)
+    const totalLimit = Math.min(parseInt(limit) || 50, 600);
     const orderStatus = (status === 'open' || status === 'closed') ? status : 'any';
-    let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${limit}&status=${orderStatus}`;
-    if (page_info) url += `&page_info=${page_info}`;
+    const shopifyHeaders = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
+    const PAGE_SIZE = 250; // Shopify max per request
 
-    const response = await axios.get(url, {
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN },
-    });
+    // If limit ≤ 250 and page_info provided: single request (manual pagination)
+    if (page_info || totalLimit <= 250) {
+      const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${Math.min(totalLimit, 250)}&status=${orderStatus}${page_info ? `&page_info=${page_info}` : ''}`;
+      const response = await axios.get(url, { headers: shopifyHeaders });
+      const orders = response.data.orders.map(mapShopifyOrder);
+      const linkHeader = response.headers['link'] || '';
+      const nextMatch = linkHeader.match(/<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"/);
+      return res.json({ orders, next_page_info: nextMatch ? nextMatch[1] : null });
+    }
 
-    const orders = response.data.orders.map((o) => {
-      const addr = o.shipping_address || o.billing_address || {};
-      const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
-      return {
-        id: o.id,
-        shopify_order_number: o.order_number,
-        created_at: o.created_at,
-        customer_name: `${addr.first_name || ''} ${addr.last_name || ''}`.trim() || o.contact_email,
-        phone: addr.phone || o.phone || '',
-        city: addr.province || addr.city || '',
-        address: [addr.address1, addr.address2].filter(Boolean).join('، '),
-        address_full: [
-          addr.address1,
-          addr.address2,
-          addr.city,
-          addr.province,
-          addr.zip,
-        ].filter(Boolean).join('، '),
-        items,
-        total_price: o.total_price,
-        currency: o.currency,
-        financial_status: o.financial_status,
-        fulfillment_status: o.fulfillment_status || 'unfulfilled',
-        qpx_serial: o.note_attributes?.find((n) => n.name === 'qpx_serial')?.value || null,
-      };
-    });
+    // Fetch multiple pages to reach totalLimit (up to 600)
+    let allOrders = [];
+    let nextPage = null;
+    let firstPage = true;
 
-    // Pagination link header
-    const linkHeader = response.headers['link'] || '';
-    let nextPageInfo = null;
-    const nextMatch = linkHeader.match(/<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"/);
-    if (nextMatch) nextPageInfo = nextMatch[1];
+    while (allOrders.length < totalLimit) {
+      const remaining = totalLimit - allOrders.length;
+      const pageSize = Math.min(remaining, PAGE_SIZE);
+      let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&status=${orderStatus}`;
+      if (!firstPage && nextPage) url += `&page_info=${nextPage}`;
+      firstPage = false;
 
-    res.json({ orders, next_page_info: nextPageInfo });
+      const response = await axios.get(url, { headers: shopifyHeaders });
+      const batch = response.data.orders.map(mapShopifyOrder);
+      allOrders = allOrders.concat(batch);
+
+      const linkHeader = response.headers['link'] || '';
+      const nextMatch = linkHeader.match(/<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"/);
+      nextPage = nextMatch ? nextMatch[1] : null;
+
+      if (!nextPage || batch.length === 0) break;
+    }
+
+    res.json({ orders: allOrders.slice(0, totalLimit), next_page_info: null });
   } catch (err) {
     console.error('Shopify error:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });

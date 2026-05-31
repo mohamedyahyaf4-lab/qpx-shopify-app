@@ -123,7 +123,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('any');
-  const [limitValue, setLimitValue] = useState('50');
+  const [limitValue, setLimitValue] = useState('100');
   const [sending, setSending] = useState(false);
   const isSendingRef = useRef(false);
   const [clearingId, setClearingId] = useState(null);
@@ -434,7 +434,7 @@ export default function App() {
                   value={limitValue}
                   onChange={setLimitValue}
                   min={1}
-                  max={250}
+                  max={600}
                   autoComplete="off"
                 />
               </div>
