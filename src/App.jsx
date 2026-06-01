@@ -218,22 +218,38 @@ export default function App() {
       });
 
     setSending(true);
+
+    // Split into batches of 50 to avoid 413 payload-too-large errors
+    const BATCH_SIZE = 50;
+    const batches = [];
+    for (let i = 0; i < ordersWithCity.length; i += BATCH_SIZE) {
+      batches.push(ordersWithCity.slice(i, i + BATCH_SIZE));
+    }
+
+    const allResults = [];
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60000); // 60s timeout
-      const res = await fetch('/api/qpx/send-orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orders: ordersWithCity }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-      const data = await res.json();
-      setResultsModal({ active: true, results: data.results });
+      for (const batch of batches) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 90000); // 90s per batch
+        const res = await fetch('/api/qpx/send-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orders: batch }),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        const data = await res.json();
+        allResults.push(...data.results);
+      }
+      setResultsModal({ active: true, results: allResults });
     } catch (e) {
-      const msg = e.name === 'AbortError' ? 'انتهت مهلة الإرسال (60 ثانية)، حاول مرة أخرى' : e.message;
+      const msg = e.name === 'AbortError' ? 'انتهت مهلة الإرسال، حاول مرة أخرى' : e.message;
       showToast('❌ ' + msg, true);
+      // Show partial results if any were sent before the error
+      if (allResults.length > 0) {
+        setResultsModal({ active: true, results: allResults });
+      }
     } finally {
       isSendingRef.current = false;
       setSending(false);
