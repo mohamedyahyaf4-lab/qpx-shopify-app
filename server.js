@@ -210,6 +210,8 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       continue;
     }
     try {
+      // If the customer already paid online, no cash collection needed → total_amount = 0
+      const isPaid = order.financial_status === 'paid';
       const payload = {
         shipment_contents: order.items,
         full_name: `${order.customer_name} #${order.shopify_order_number}`,
@@ -217,8 +219,8 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         address: order.address_full || order.address,
         ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
         customer: QPX_CUSTOMER_ID,
-        total_amount: parseFloat(order.total_price) || 0,
-        notes: `Shopify Order #${order.shopify_order_number}`,
+        total_amount: isPaid ? 0 : (parseFloat(order.total_price) || 0),
+        notes: `Shopify Order #${order.shopify_order_number}${isPaid ? ' (مدفوع مسبقاً)' : ''}`,
         order_date: new Date().toISOString(),
       };
 
