@@ -238,7 +238,11 @@ export default function App() {
           signal: controller.signal,
         });
         clearTimeout(timer);
-        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        if (!res.ok) {
+          let errMsg = `Server error: ${res.status}`;
+          try { const errData = await res.json(); errMsg = errData.error || errMsg; } catch {}
+          throw new Error(errMsg);
+        }
         const data = await res.json();
         allResults.push(...data.results);
       }
