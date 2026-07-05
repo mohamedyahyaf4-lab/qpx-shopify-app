@@ -143,13 +143,21 @@ app.get('/api/qpx/test-auth', async (req, res) => {
 
 function mapShopifyOrder(o) {
   const addr = o.shipping_address || o.billing_address || {};
+  const customer = o.customer || {};
   const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
+
+  const addrName = `${addr.first_name || ''} ${addr.last_name || ''}`.trim();
+  const customerName = `${customer.first_name || ''} ${customer.last_name || ''}`.trim();
+  const name = addrName || customerName || o.contact_email || o.email || '';
+
+  const phone = addr.phone || o.phone || customer.phone || '';
+
   return {
     id: o.id,
     shopify_order_number: o.order_number,
     created_at: o.created_at,
-    customer_name: `${addr.first_name || ''} ${addr.last_name || ''}`.trim() || o.contact_email,
-    phone: addr.phone || o.phone || '',
+    customer_name: name,
+    phone,
     city: addr.province || addr.city || '',
     address: [addr.address1, addr.address2].filter(Boolean).join('، '),
     address_full: [addr.address1, addr.address2, addr.city, addr.province, addr.zip].filter(Boolean).join('، '),
