@@ -232,10 +232,29 @@ app.post('/webhooks/orders', (req, res) => {
     cacheOrderPii(req.body);
     const o = req.body || {};
     console.log(`Webhook received: order #${o.order_number || o.id} — name=${!!(piiCache[String(o.id)] || {}).name} phone=${!!(piiCache[String(o.id)] || {}).phone}`);
+    try { fs.writeFileSync(path.join(DATA_DIR, 'last-webhook.json'), JSON.stringify(req.body)); } catch {}
   } catch (err) {
     console.error('Webhook processing error:', err.message);
   }
   res.status(200).send('ok');
+});
+
+// Debug: structure of the last webhook payload (which PII fields Shopify sent)
+app.get('/api/webhook-cache/last', (req, res) => {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'last-webhook.json'), 'utf8'));
+    res.json({
+      order_number: o.order_number,
+      top_keys: Object.keys(o),
+      shipping_address: o.shipping_address ? Object.fromEntries(Object.entries(o.shipping_address).map(([k, v]) => [k, v === null ? null : typeof v === 'string' ? (v ? 'SET' : 'EMPTY') : v])) : null,
+      billing_address_keys: o.billing_address ? Object.keys(o.billing_address) : null,
+      customer: o.customer ? Object.fromEntries(Object.entries(o.customer).filter(([k]) => ['first_name', 'last_name', 'phone', 'email', 'default_address'].includes(k)).map(([k, v]) => [k, v === null ? null : typeof v === 'object' ? 'OBJECT' : 'SET'])) : null,
+      phone: o.phone === null ? null : o.phone ? 'SET' : o.phone,
+      email: o.email === null ? null : o.email ? 'SET' : o.email,
+    });
+  } catch (err) {
+    res.status(404).json({ error: 'no webhook captured yet' });
+  }
 });
 
 // Health/debug: how many orders captured, without exposing the PII itself
