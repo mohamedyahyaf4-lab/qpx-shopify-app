@@ -55,18 +55,48 @@ app.get('*', (req, res, next) => {
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const QPX_BASE = 'https://api.qpxpress.com';
-const QPX_CUSTOMER_ID = parseInt(process.env.QPX_CUSTOMER_ID || '1021');
+
+// Runtime settings — start from env vars, can be updated via /api/settings
+let runtimeSettings = {
+  qpxUsername: process.env.QPX_USERNAME || '',
+  qpxPassword: process.env.QPX_PASSWORD || '',
+  qpxCustomerId: parseInt(process.env.QPX_CUSTOMER_ID || '1021'),
+};
+
 let qpxToken = null;
 let qpxTokenExpiry = 0;
-let qpxRefreshToken = process.env.QPX_REFRESH_TOKEN;
+let qpxRefreshToken = process.env.QPX_REFRESH_TOKEN || null;
 
-// ─── QPX Auth ───────────────────────────────────────────────────────────────
+// ─── Settings API ─────────────────────────────────────────────────────────────
+
+app.get('/api/settings', (req, res) => {
+  res.json({
+    qpxUsername: runtimeSettings.qpxUsername,
+    qpxCustomerId: runtimeSettings.qpxCustomerId,
+    hasPassword: !!runtimeSettings.qpxPassword,
+    storeName: process.env.STORE_NAME || '',
+    shopifyStore: SHOPIFY_STORE || '',
+  });
+});
+
+app.post('/api/settings', (req, res) => {
+  const { qpxUsername, qpxPassword, qpxCustomerId } = req.body;
+  if (qpxUsername !== undefined) runtimeSettings.qpxUsername = qpxUsername.trim();
+  if (qpxPassword && qpxPassword.trim()) runtimeSettings.qpxPassword = qpxPassword.trim();
+  if (qpxCustomerId !== undefined) runtimeSettings.qpxCustomerId = parseInt(qpxCustomerId) || runtimeSettings.qpxCustomerId;
+  // Reset cached token so next request uses new credentials
+  qpxToken = null;
+  qpxTokenExpiry = 0;
+  qpxRefreshToken = null;
+  console.log('Settings updated — QPX token cache cleared');
+  res.json({ success: true });
+});
+
+// ─── QPX Auth ─────────────────────────────────────────────────────────────────
 
 async function getQpxToken() {
-  // Return cached access token if still valid
   if (qpxToken && Date.now() < qpxTokenExpiry) return qpxToken;
 
-  // Try refresh token first
   if (qpxRefreshToken) {
     try {
       const res = await axios.post(`${QPX_BASE}/api/token/refresh/`, {
@@ -81,14 +111,13 @@ async function getQpxToken() {
     }
   }
 
-  // Fallback: login with username + password to get fresh tokens
   const loginRes = await axios.post(`${QPX_BASE}/api/token/`, {
-    username: process.env.QPX_USERNAME,
-    password: process.env.QPX_PASSWORD,
+    username: runtimeSettings.qpxUsername,
+    password: runtimeSettings.qpxPassword,
   }, { timeout: 15000 });
 
   qpxToken = loginRes.data.access;
-  qpxRefreshToken = loginRes.data.refresh; // update in-memory refresh token
+  qpxRefreshToken = loginRes.data.refresh;
   qpxTokenExpiry = Date.now() + 25 * 60 * 1000;
   console.log('QPX login successful, new tokens obtained');
   return qpxToken;
@@ -98,7 +127,19 @@ function qpxHeaders(token) {
   return { Authorization: `Bearer ${token}` };
 }
 
-// ─── Shopify: Get Orders ─────────────────────────────────────────────────────
+// ─── QPX: Test Auth ───────────────────────────────────────────────────────────
+
+app.get('/api/qpx/test-auth', async (req, res) => {
+  try {
+    const token = await getQpxToken();
+    res.json({ success: true, message: 'تم الاتصال بـ QPX بنجاح ✅' });
+  } catch (err) {
+    const detail = err.response?.data?.detail || err.response?.data || err.message;
+    res.status(502).json({ success: false, error: String(detail).substring(0, 200) });
+  }
+});
+
+// ─── Shopify: Get Orders ──────────────────────────────────────────────────────
 
 function mapShopifyOrder(o) {
   const addr = o.shipping_address || o.billing_address || {};
@@ -127,9 +168,8 @@ app.get('/api/shopify/orders', async (req, res) => {
     const totalLimit = Math.min(parseInt(limit) || 50, 600);
     const orderStatus = (status === 'open' || status === 'closed') ? status : 'any';
     const shopifyHeaders = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
-    const PAGE_SIZE = 250; // Shopify max per request
+    const PAGE_SIZE = 250;
 
-    // If limit ≤ 250 and page_info provided: single request (manual pagination)
     if (page_info || totalLimit <= 250) {
       const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${Math.min(totalLimit, 250)}&status=${orderStatus}${page_info ? `&page_info=${page_info}` : ''}`;
       const response = await axios.get(url, { headers: shopifyHeaders });
@@ -139,7 +179,6 @@ app.get('/api/shopify/orders', async (req, res) => {
       return res.json({ orders, next_page_info: nextMatch ? nextMatch[1] : null });
     }
 
-    // Fetch multiple pages to reach totalLimit (up to 600)
     let allOrders = [];
     let nextPage = null;
     let firstPage = true;
@@ -147,7 +186,6 @@ app.get('/api/shopify/orders', async (req, res) => {
     while (allOrders.length < totalLimit) {
       const remaining = totalLimit - allOrders.length;
       const pageSize = Math.min(remaining, PAGE_SIZE);
-      // When using page_info, Shopify forbids passing status — only limit + page_info allowed
       let url = firstPage
         ? `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&status=${orderStatus}`
         : `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${pageSize}&page_info=${nextPage}`;
@@ -171,7 +209,7 @@ app.get('/api/shopify/orders', async (req, res) => {
   }
 });
 
-// ─── QPX: Get Cities ─────────────────────────────────────────────────────────
+// ─── QPX: Get Cities ──────────────────────────────────────────────────────────
 
 app.get('/api/qpx/cities', async (req, res) => {
   try {
@@ -187,7 +225,7 @@ app.get('/api/qpx/cities', async (req, res) => {
   }
 });
 
-// ─── QPX: Send Orders ────────────────────────────────────────────────────────
+// ─── QPX: Send Orders ─────────────────────────────────────────────────────────
 
 app.post('/api/qpx/send-orders', async (req, res) => {
   const { orders } = req.body;
@@ -204,13 +242,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
   const results = [];
 
   for (const order of orders) {
-    // Skip if already sent (has qpx_serial) — prevents duplicate submissions
     if (order.qpx_serial) {
       results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'skipped', qpx_serial: order.qpx_serial });
       continue;
     }
     try {
-      // If the customer already paid online, no cash collection needed → total_amount = 0
       const isPaid = order.financial_status === 'paid';
       const payload = {
         shipment_contents: order.items,
@@ -218,7 +254,7 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         phone: order.phone,
         address: order.address_full || order.address,
         ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
-        customer: QPX_CUSTOMER_ID,
+        customer: runtimeSettings.qpxCustomerId,
         total_amount: isPaid ? 0 : (parseFloat(order.total_price) || 0),
         notes: `Shopify Order #${order.shopify_order_number}${isPaid ? ' (مدفوع مسبقاً)' : ''}`,
         order_date: new Date().toISOString(),
@@ -265,7 +301,7 @@ async function saveQpxSerialToShopify(orderId, orderNumber, serial) {
   }
 }
 
-// ─── Shopify: Clear QPX Serial ───────────────────────────────────────────────
+// ─── Shopify: Clear QPX Serial ────────────────────────────────────────────────
 
 app.delete('/api/shopify/orders/:id/qpx-serial', async (req, res) => {
   const orderId = req.params.id;
@@ -282,7 +318,7 @@ app.delete('/api/shopify/orders/:id/qpx-serial', async (req, res) => {
   }
 });
 
-// ─── QPX: Get Sent Orders ────────────────────────────────────────────────────
+// ─── QPX: Get Sent Orders ─────────────────────────────────────────────────────
 
 app.get('/api/qpx/orders', async (req, res) => {
   try {
@@ -298,7 +334,7 @@ app.get('/api/qpx/orders', async (req, res) => {
   }
 });
 
-// ─── Start ───────────────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

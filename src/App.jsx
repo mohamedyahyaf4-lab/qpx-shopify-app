@@ -20,7 +20,9 @@ import {
   Spinner,
   Divider,
   Tooltip,
+  Icon,
 } from '@shopify/polaris';
+import { SettingsIcon } from '@shopify/polaris-icons';
 
 // ─── City / Governorate Matching ─────────────────────────────────────────────
 
@@ -129,6 +131,11 @@ export default function App() {
   const [clearingId, setClearingId] = useState(null);
   const [toast, setToast] = useState({ active: false, message: '', error: false });
   const [resultsModal, setResultsModal] = useState({ active: false, results: [] });
+  const [settingsModal, setSettingsModal] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({ qpxUsername: '', qpxPassword: '', qpxCustomerId: '' });
+  const [settingsInfo, setSettingsInfo] = useState(null);
+  const [testingConn, setTestingConn] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   const resourceName = { singular: 'أوردر', plural: 'أوردرات' };
 
@@ -279,6 +286,57 @@ export default function App() {
     }
   }, []);
 
+  const openSettings = useCallback(async () => {
+    setSettingsModal(true);
+    try {
+      const res = await fetch('/api/settings');
+      const data = await res.json();
+      setSettingsInfo(data);
+      setSettingsForm({
+        qpxUsername: data.qpxUsername || '',
+        qpxPassword: '',
+        qpxCustomerId: String(data.qpxCustomerId || ''),
+      });
+    } catch {}
+  }, []);
+
+  const saveSettings = useCallback(async () => {
+    setSavingSettings(true);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsForm),
+      });
+      showToast('✅ تم حفظ الإعدادات');
+      setSettingsModal(false);
+    } catch (e) {
+      showToast('❌ فشل الحفظ: ' + e.message, true);
+    } finally {
+      setSavingSettings(false);
+    }
+  }, [settingsForm]);
+
+  const testConnection = useCallback(async () => {
+    // Save first then test
+    setTestingConn(true);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsForm),
+      });
+      const res = await fetch('/api/qpx/test-auth');
+      const data = await res.json();
+      if (data.success) showToast('✅ ' + data.message);
+      else showToast('❌ ' + data.error, true);
+    } catch (e) {
+      showToast('❌ خطأ: ' + e.message, true);
+    } finally {
+      setTestingConn(false);
+    }
+  }, [settingsForm]);
+
   function showToast(message, isError = false) {
     setToast({ active: true, message, error: isError });
   }
@@ -400,7 +458,15 @@ export default function App() {
         />
       )}
 
-      <Page title="🚚 QPX Express" subtitle={`${STORE_NAME} — لوحة الشحن`}>
+      <Page
+        title="🚚 QPX Express"
+        subtitle={`${STORE_NAME} — لوحة الشحن`}
+        secondaryActions={[{
+          content: 'الإعدادات',
+          icon: SettingsIcon,
+          onAction: openSettings,
+        }]}
+      >
 
         <BlockStack gap="500">
 
@@ -522,6 +588,58 @@ export default function App() {
 
         </BlockStack>
       </Page>
+
+      {/* ── Settings Modal ── */}
+      <Modal
+        open={settingsModal}
+        onClose={() => setSettingsModal(false)}
+        title="⚙️ إعدادات شركة الشحن (QPX)"
+        primaryAction={{ content: 'حفظ', onAction: saveSettings, loading: savingSettings }}
+        secondaryActions={[
+          { content: 'اختبار الاتصال', onAction: testConnection, loading: testingConn },
+          { content: 'إلغاء', onAction: () => setSettingsModal(false) },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {settingsInfo && (
+              <Banner tone="info">
+                <Text variant="bodySm">
+                  المتجر: <strong>{settingsInfo.shopifyStore}</strong>
+                  {' — '}
+                  رقم العميل الحالي: <strong>{settingsInfo.qpxCustomerId}</strong>
+                  {' — '}
+                  كلمة المرور: <strong>{settingsInfo.hasPassword ? '••••••' : 'غير محددة'}</strong>
+                </Text>
+              </Banner>
+            )}
+            <TextField
+              label="اسم المستخدم (QPX Username)"
+              value={settingsForm.qpxUsername}
+              onChange={(v) => setSettingsForm((f) => ({ ...f, qpxUsername: v }))}
+              autoComplete="off"
+              placeholder="مثال: mystore@qp"
+            />
+            <TextField
+              label="كلمة المرور (QPX Password)"
+              type="password"
+              value={settingsForm.qpxPassword}
+              onChange={(v) => setSettingsForm((f) => ({ ...f, qpxPassword: v }))}
+              autoComplete="new-password"
+              placeholder={settingsInfo?.hasPassword ? 'اتركها فارغة للإبقاء على الحالية' : 'أدخل كلمة المرور'}
+              helpText={settingsInfo?.hasPassword ? 'اتركها فارغة إذا لم تريد تغييرها' : ''}
+            />
+            <TextField
+              label="رقم العميل (Customer ID)"
+              type="number"
+              value={settingsForm.qpxCustomerId}
+              onChange={(v) => setSettingsForm((f) => ({ ...f, qpxCustomerId: v }))}
+              autoComplete="off"
+              placeholder="مثال: 1021"
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
 
       {/* ── Results Modal ── */}
       <Modal
