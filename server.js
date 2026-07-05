@@ -197,27 +197,42 @@ function verifyShopifyWebhook(req) {
   }
 }
 
+// Shopify Flow writes "QPX-DATA|name=...|phone=...|addr1=..." into the order
+// note (Flow has full PII access even on Basic plan). Parse it back out.
+function parseNotePii(note) {
+  if (!note || !String(note).startsWith('QPX-DATA')) return null;
+  const out = {};
+  String(note).split('|').slice(1).forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx > 0) out[part.substring(0, idx).trim()] = part.substring(idx + 1).trim();
+  });
+  return out;
+}
+
 function cacheOrderPii(o) {
   if (!o || !o.id) return;
   const addr = o.shipping_address || o.billing_address || {};
   const customer = o.customer || {};
   const defAddr = customer.default_address || {};
 
+  const notePii = parseNotePii(o.note) || {};
+
   const name =
     `${addr.first_name || ''} ${addr.last_name || ''}`.trim() ||
     `${customer.first_name || ''} ${customer.last_name || ''}`.trim() ||
-    `${defAddr.first_name || ''} ${defAddr.last_name || ''}`.trim();
-  const phone = addr.phone || o.phone || customer.phone || defAddr.phone || '';
+    `${defAddr.first_name || ''} ${defAddr.last_name || ''}`.trim() ||
+    notePii.name || '';
+  const phone = addr.phone || o.phone || customer.phone || defAddr.phone || notePii.phone || '';
 
   piiCache[String(o.id)] = {
     name,
     phone,
-    email: o.contact_email || o.email || customer.email || '',
-    address1: addr.address1 || defAddr.address1 || '',
-    address2: addr.address2 || defAddr.address2 || '',
-    city: addr.city || defAddr.city || '',
-    province: addr.province || defAddr.province || '',
-    zip: addr.zip || defAddr.zip || '',
+    email: o.contact_email || o.email || customer.email || notePii.email || '',
+    address1: addr.address1 || defAddr.address1 || notePii.addr1 || '',
+    address2: addr.address2 || defAddr.address2 || notePii.addr2 || '',
+    city: addr.city || defAddr.city || notePii.city || '',
+    province: addr.province || defAddr.province || notePii.prov || '',
+    zip: addr.zip || defAddr.zip || notePii.zip || '',
     received_at: Date.now(),
   };
   schedulePiiSave();
@@ -277,18 +292,19 @@ function mapShopifyOrder(o) {
   const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
 
   const cached = piiCache[String(o.id)] || {};
+  const notePii = parseNotePii(o.note) || {};
 
   const addrName = `${addr.first_name || ''} ${addr.last_name || ''}`.trim();
   const customerName = `${customer.first_name || ''} ${customer.last_name || ''}`.trim();
-  const name = addrName || customerName || cached.name || o.contact_email || o.email || cached.email || '';
+  const name = addrName || customerName || notePii.name || cached.name || o.contact_email || o.email || cached.email || '';
 
-  const phone = addr.phone || o.phone || customer.phone || cached.phone || '';
+  const phone = addr.phone || o.phone || customer.phone || notePii.phone || cached.phone || '';
 
-  const a1 = addr.address1 || cached.address1;
-  const a2 = addr.address2 || cached.address2;
-  const city = addr.city || cached.city;
-  const province = addr.province || cached.province;
-  const zip = addr.zip || cached.zip;
+  const a1 = addr.address1 || notePii.addr1 || cached.address1;
+  const a2 = addr.address2 || notePii.addr2 || cached.address2;
+  const city = addr.city || notePii.city || cached.city;
+  const province = addr.province || notePii.prov || cached.province;
+  const zip = addr.zip || notePii.zip || cached.zip;
 
   return {
     id: o.id,
