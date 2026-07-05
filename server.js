@@ -3,10 +3,15 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, res, buf) => { req.rawBody = buf; },
+}));
 
 // Allow Shopify to embed the app in an iframe
 app.use((req, res, next) => {
@@ -139,6 +144,112 @@ app.get('/api/qpx/test-auth', async (req, res) => {
   }
 });
 
+// ─── Webhook PII Cache ────────────────────────────────────────────────────────
+// Shopify webhook payloads include full customer data even when the REST API
+// strips PII (Basic-plan custom apps created after mid-2026). We capture
+// orders/create + orders/updated payloads and merge the PII into API results.
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const PII_CACHE_FILE = path.join(DATA_DIR, 'orders-pii-cache.json');
+const PII_CACHE_MAX = 20000;
+let piiCache = {};
+
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (fs.existsSync(PII_CACHE_FILE)) {
+    piiCache = JSON.parse(fs.readFileSync(PII_CACHE_FILE, 'utf8'));
+    console.log(`PII cache loaded: ${Object.keys(piiCache).length} orders from ${PII_CACHE_FILE}`);
+  }
+} catch (err) {
+  console.error('PII cache load failed:', err.message);
+  piiCache = {};
+}
+
+let piiSaveTimer = null;
+function schedulePiiSave() {
+  if (piiSaveTimer) return;
+  piiSaveTimer = setTimeout(() => {
+    piiSaveTimer = null;
+    try {
+      const keys = Object.keys(piiCache);
+      if (keys.length > PII_CACHE_MAX) {
+        keys
+          .sort((a, b) => (piiCache[a].received_at || 0) - (piiCache[b].received_at || 0))
+          .slice(0, keys.length - PII_CACHE_MAX)
+          .forEach((k) => delete piiCache[k]);
+      }
+      fs.writeFileSync(PII_CACHE_FILE, JSON.stringify(piiCache));
+    } catch (err) {
+      console.error('PII cache save failed:', err.message);
+    }
+  }, 2000);
+}
+
+function verifyShopifyWebhook(req) {
+  const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
+  if (!secret) return true; // verification optional — enable by setting the secret
+  try {
+    const hmac = req.get('X-Shopify-Hmac-Sha256') || '';
+    const digest = crypto.createHmac('sha256', secret).update(req.rawBody).digest('base64');
+    return hmac.length === digest.length && crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmac));
+  } catch {
+    return false;
+  }
+}
+
+function cacheOrderPii(o) {
+  if (!o || !o.id) return;
+  const addr = o.shipping_address || o.billing_address || {};
+  const customer = o.customer || {};
+  const defAddr = customer.default_address || {};
+
+  const name =
+    `${addr.first_name || ''} ${addr.last_name || ''}`.trim() ||
+    `${customer.first_name || ''} ${customer.last_name || ''}`.trim() ||
+    `${defAddr.first_name || ''} ${defAddr.last_name || ''}`.trim();
+  const phone = addr.phone || o.phone || customer.phone || defAddr.phone || '';
+
+  piiCache[String(o.id)] = {
+    name,
+    phone,
+    email: o.contact_email || o.email || customer.email || '',
+    address1: addr.address1 || defAddr.address1 || '',
+    address2: addr.address2 || defAddr.address2 || '',
+    city: addr.city || defAddr.city || '',
+    province: addr.province || defAddr.province || '',
+    zip: addr.zip || defAddr.zip || '',
+    received_at: Date.now(),
+  };
+  schedulePiiSave();
+}
+
+app.post('/webhooks/orders', (req, res) => {
+  if (!verifyShopifyWebhook(req)) {
+    console.warn('Webhook HMAC verification failed');
+    return res.status(401).send('invalid hmac');
+  }
+  try {
+    cacheOrderPii(req.body);
+    const o = req.body || {};
+    console.log(`Webhook received: order #${o.order_number || o.id} — name=${!!(piiCache[String(o.id)] || {}).name} phone=${!!(piiCache[String(o.id)] || {}).phone}`);
+  } catch (err) {
+    console.error('Webhook processing error:', err.message);
+  }
+  res.status(200).send('ok');
+});
+
+// Health/debug: how many orders captured, without exposing the PII itself
+app.get('/api/webhook-cache/status', (req, res) => {
+  const entries = Object.values(piiCache);
+  res.json({
+    count: entries.length,
+    with_name: entries.filter((e) => e.name).length,
+    with_phone: entries.filter((e) => e.phone).length,
+    last_received_at: entries.length ? new Date(Math.max(...entries.map((e) => e.received_at || 0))).toISOString() : null,
+    data_dir: DATA_DIR,
+  });
+});
+
 // ─── Shopify: Get Orders ──────────────────────────────────────────────────────
 
 function mapShopifyOrder(o) {
@@ -146,11 +257,19 @@ function mapShopifyOrder(o) {
   const customer = o.customer || {};
   const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
 
+  const cached = piiCache[String(o.id)] || {};
+
   const addrName = `${addr.first_name || ''} ${addr.last_name || ''}`.trim();
   const customerName = `${customer.first_name || ''} ${customer.last_name || ''}`.trim();
-  const name = addrName || customerName || o.contact_email || o.email || '';
+  const name = addrName || customerName || cached.name || o.contact_email || o.email || cached.email || '';
 
-  const phone = addr.phone || o.phone || customer.phone || '';
+  const phone = addr.phone || o.phone || customer.phone || cached.phone || '';
+
+  const a1 = addr.address1 || cached.address1;
+  const a2 = addr.address2 || cached.address2;
+  const city = addr.city || cached.city;
+  const province = addr.province || cached.province;
+  const zip = addr.zip || cached.zip;
 
   return {
     id: o.id,
@@ -158,9 +277,9 @@ function mapShopifyOrder(o) {
     created_at: o.created_at,
     customer_name: name,
     phone,
-    city: addr.province || addr.city || '',
-    address: [addr.address1, addr.address2].filter(Boolean).join('، '),
-    address_full: [addr.address1, addr.address2, addr.city, addr.province, addr.zip].filter(Boolean).join('، '),
+    city: province || city || '',
+    address: [a1, a2].filter(Boolean).join('، '),
+    address_full: [a1, a2, city, province, zip].filter(Boolean).join('، '),
     items,
     total_price: o.total_price,
     currency: o.currency,
