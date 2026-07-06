@@ -216,6 +216,10 @@ function cacheOrderPii(o) {
   const defAddr = customer.default_address || {};
 
   const notePii = parseNotePii(o.note) || {};
+  // Sticky merge: Flow writes PII into the note but Shopify's checkout
+  // post-processing can clear it moments later; a later webhook must never
+  // erase PII we already captured.
+  const prev = piiCache[String(o.id)] || {};
 
   const name =
     `${addr.first_name || ''} ${addr.last_name || ''}`.trim() ||
@@ -225,14 +229,14 @@ function cacheOrderPii(o) {
   const phone = addr.phone || o.phone || customer.phone || defAddr.phone || notePii.phone || '';
 
   piiCache[String(o.id)] = {
-    name,
-    phone,
-    email: o.contact_email || o.email || customer.email || notePii.email || '',
-    address1: addr.address1 || defAddr.address1 || notePii.addr1 || '',
-    address2: addr.address2 || defAddr.address2 || notePii.addr2 || '',
-    city: addr.city || defAddr.city || notePii.city || '',
-    province: addr.province || defAddr.province || notePii.prov || '',
-    zip: addr.zip || defAddr.zip || notePii.zip || '',
+    name: name || prev.name || '',
+    phone: phone || prev.phone || '',
+    email: o.contact_email || o.email || customer.email || notePii.email || prev.email || '',
+    address1: addr.address1 || defAddr.address1 || notePii.addr1 || prev.address1 || '',
+    address2: addr.address2 || defAddr.address2 || notePii.addr2 || prev.address2 || '',
+    city: addr.city || defAddr.city || notePii.city || prev.city || '',
+    province: addr.province || defAddr.province || notePii.prov || prev.province || '',
+    zip: addr.zip || defAddr.zip || notePii.zip || prev.zip || '',
     received_at: Date.now(),
   };
   schedulePiiSave();
