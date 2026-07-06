@@ -434,6 +434,21 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       console.log(`QPX response for #${order.shopify_order_number}:`, JSON.stringify(qpxRes.data));
       const serial = qpxRes.data?.serial || qpxRes.data?.id;
 
+      // QPX ignores the customer field on creation and assigns the API user's
+      // default customer record — reassign so the order shows in the client portal.
+      if (serial && qpxRes.data?.customer && qpxRes.data.customer !== runtimeSettings.qpxCustomerId) {
+        try {
+          await axios.patch(
+            `${QPX_BASE}/addorders/order/${serial}/`,
+            { customer: runtimeSettings.qpxCustomerId },
+            { headers: qpxHeaders(token), timeout: 15000 }
+          );
+          console.log(`QPX order ${serial} reassigned to customer ${runtimeSettings.qpxCustomerId}`);
+        } catch (err) {
+          console.error(`QPX customer reassign failed for ${serial}:`, err.response?.data || err.message);
+        }
+      }
+
       if (serial) {
         await saveQpxSerialToShopify(order.id, order.shopify_order_number, serial);
       }
