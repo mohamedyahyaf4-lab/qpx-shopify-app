@@ -418,7 +418,8 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         shipment_contents: order.items,
         full_name: `${order.customer_name} #${order.shopify_order_number}`,
         phone: order.phone,
-        address: order.address_full || order.address,
+        // Street address only — the governorate goes in the QPX city field, not the address text
+        address: order.address || order.address_full,
         ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
         customer: runtimeSettings.qpxCustomerId,
         total_amount: isPaid ? 0 : (parseFloat(order.total_price) || 0),
@@ -434,18 +435,19 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       console.log(`QPX response for #${order.shopify_order_number}:`, JSON.stringify(qpxRes.data));
       const serial = qpxRes.data?.serial || qpxRes.data?.id;
 
-      // QPX ignores the customer field on creation and assigns the API user's
-      // default customer record — reassign so the order shows in the client portal.
-      if (serial && qpxRes.data?.customer && qpxRes.data.customer !== runtimeSettings.qpxCustomerId) {
+      // QPX ignores customer and total_fees on creation (assigns the API user's
+      // default customer and auto fees) — PATCH both so the order shows in the
+      // client portal with zero fees.
+      if (serial) {
         try {
           await axios.patch(
             `${QPX_BASE}/addorders/order/${serial}/`,
-            { customer: runtimeSettings.qpxCustomerId },
+            { customer: runtimeSettings.qpxCustomerId, total_fees: 0 },
             { headers: qpxHeaders(token), timeout: 15000 }
           );
-          console.log(`QPX order ${serial} reassigned to customer ${runtimeSettings.qpxCustomerId}`);
+          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}, total_fees=0`);
         } catch (err) {
-          console.error(`QPX customer reassign failed for ${serial}:`, err.response?.data || err.message);
+          console.error(`QPX patch failed for ${serial}:`, err.response?.data || err.message);
         }
       }
 
