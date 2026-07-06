@@ -339,7 +339,9 @@ app.get('/api/shopify/orders', async (req, res) => {
     if (page_info || totalLimit <= 250) {
       const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=${Math.min(totalLimit, 250)}&status=${orderStatus}${page_info ? `&page_info=${page_info}` : ''}`;
       const response = await axios.get(url, { headers: shopifyHeaders });
-      const orders = response.data.orders.map(mapShopifyOrder);
+      const orders = response.data.orders
+        .filter((o) => !o.cancelled_at)
+        .map(mapShopifyOrder);
       const linkHeader = response.headers['link'] || '';
       const nextMatch = linkHeader.match(/<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"/);
       return res.json({ orders, next_page_info: nextMatch ? nextMatch[1] : null });
@@ -358,7 +360,9 @@ app.get('/api/shopify/orders', async (req, res) => {
       firstPage = false;
 
       const response = await axios.get(url, { headers: shopifyHeaders });
-      const batch = response.data.orders.map(mapShopifyOrder);
+      const batch = response.data.orders
+        .filter((o) => !o.cancelled_at)
+        .map(mapShopifyOrder);
       allOrders = allOrders.concat(batch);
 
       const linkHeader = response.headers['link'] || '';
