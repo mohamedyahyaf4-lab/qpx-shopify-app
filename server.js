@@ -313,6 +313,14 @@ function mapShopifyOrder(o) {
   const province = addr.province || notePii.prov || cached.province;
   const zip = addr.zip || notePii.zip || cached.zip;
 
+  // Shipping the customer was charged in Shopify (used as QPX fee for non-Andmore stores)
+  let shipping_price = '0';
+  if (o.total_shipping_price_set?.shop_money?.amount != null) {
+    shipping_price = o.total_shipping_price_set.shop_money.amount;
+  } else if (Array.isArray(o.shipping_lines) && o.shipping_lines.length) {
+    shipping_price = String(o.shipping_lines.reduce((s, l) => s + (parseFloat(l.price) || 0), 0));
+  }
+
   return {
     id: o.id,
     shopify_order_number: o.order_number,
@@ -327,6 +335,7 @@ function mapShopifyOrder(o) {
     currency: o.currency,
     financial_status: o.financial_status,
     fulfillment_status: o.fulfillment_status || 'unfulfilled',
+    shipping_price,
     qpx_serial: o.note_attributes?.find((n) => n.name === 'qpx_serial')?.value || null,
   };
 }
@@ -451,13 +460,18 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       if (serial) {
         try {
           const patchBody = { customer: runtimeSettings.qpxCustomerId };
-          if (runtimeSettings.qpxZeroFees) patchBody.total_fees = 0;
+          // Andmore: zero fees. Other stores: match the Shopify shipping charge.
+          if (runtimeSettings.qpxZeroFees) {
+            patchBody.total_fees = 0;
+          } else {
+            patchBody.total_fees = parseFloat(order.shipping_price) || 0;
+          }
           await axios.patch(
             `${QPX_BASE}/addorders/order/${serial}/`,
             patchBody,
             { headers: qpxHeaders(token), timeout: 15000 }
           );
-          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}${runtimeSettings.qpxZeroFees ? ', total_fees=0' : ''}`);
+          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}, total_fees=${patchBody.total_fees}`);
         } catch (err) {
           console.error(`QPX patch failed for ${serial}:`, err.response?.data || err.message);
         }
