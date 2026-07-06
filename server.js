@@ -66,6 +66,9 @@ let runtimeSettings = {
   qpxUsername: process.env.QPX_USERNAME || '',
   qpxPassword: process.env.QPX_PASSWORD || '',
   qpxCustomerId: parseInt(process.env.QPX_CUSTOMER_ID || '1021'),
+  // Per-store toggles (Andmore only): send street-only address, and zero the QPX fees.
+  qpxStreetAddress: process.env.QPX_STREET_ADDRESS === 'true',
+  qpxZeroFees: process.env.QPX_ZERO_FEES === 'true',
 };
 
 let qpxToken = null;
@@ -422,8 +425,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         shipment_contents: order.items,
         full_name: `${order.customer_name} #${order.shopify_order_number}`,
         phone: order.phone,
-        // Street address only — the governorate goes in the QPX city field, not the address text
-        address: order.address || order.address_full,
+        // Andmore: street-only address (governorate goes in the QPX city field).
+        // Other stores: full address incl. governorate.
+        address: runtimeSettings.qpxStreetAddress
+          ? (order.address || order.address_full)
+          : (order.address_full || order.address),
         ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
         customer: runtimeSettings.qpxCustomerId,
         total_amount: isPaid ? 0 : (parseFloat(order.total_price) || 0),
@@ -439,17 +445,19 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       console.log(`QPX response for #${order.shopify_order_number}:`, JSON.stringify(qpxRes.data));
       const serial = qpxRes.data?.serial || qpxRes.data?.id;
 
-      // QPX ignores customer and total_fees on creation (assigns the API user's
-      // default customer and auto fees) — PATCH both so the order shows in the
-      // client portal with zero fees.
+      // QPX ignores the customer field on creation (assigns the API user's
+      // default customer) — always PATCH it so the order shows in the client
+      // portal. Only zero the fees for stores with that toggle on (Andmore).
       if (serial) {
         try {
+          const patchBody = { customer: runtimeSettings.qpxCustomerId };
+          if (runtimeSettings.qpxZeroFees) patchBody.total_fees = 0;
           await axios.patch(
             `${QPX_BASE}/addorders/order/${serial}/`,
-            { customer: runtimeSettings.qpxCustomerId, total_fees: 0 },
+            patchBody,
             { headers: qpxHeaders(token), timeout: 15000 }
           );
-          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}, total_fees=0`);
+          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}${runtimeSettings.qpxZeroFees ? ', total_fees=0' : ''}`);
         } catch (err) {
           console.error(`QPX patch failed for ${serial}:`, err.response?.data || err.message);
         }
