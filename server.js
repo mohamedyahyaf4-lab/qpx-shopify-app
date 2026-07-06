@@ -66,9 +66,11 @@ let runtimeSettings = {
   qpxUsername: process.env.QPX_USERNAME || '',
   qpxPassword: process.env.QPX_PASSWORD || '',
   qpxCustomerId: parseInt(process.env.QPX_CUSTOMER_ID || '1021'),
-  // Per-store toggles (Andmore only): send street-only address, and zero the QPX fees.
+  // Per-store toggles. Andmore: street-only address + zero fees.
+  // It's Sunglasses: match the Shopify shipping charge as the QPX fee.
   qpxStreetAddress: process.env.QPX_STREET_ADDRESS === 'true',
   qpxZeroFees: process.env.QPX_ZERO_FEES === 'true',
+  qpxMatchShipping: process.env.QPX_MATCH_SHIPPING === 'true',
 };
 
 let qpxToken = null;
@@ -460,10 +462,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
       if (serial) {
         try {
           const patchBody = { customer: runtimeSettings.qpxCustomerId };
-          // Andmore: zero fees. Other stores: match the Shopify shipping charge.
+          // Andmore: zero fees. It's Sunglasses: match Shopify shipping charge.
+          // Others: leave QPX's auto-calculated fee untouched.
           if (runtimeSettings.qpxZeroFees) {
             patchBody.total_fees = 0;
-          } else {
+          } else if (runtimeSettings.qpxMatchShipping) {
             patchBody.total_fees = parseFloat(order.shipping_price) || 0;
           }
           await axios.patch(
@@ -471,7 +474,7 @@ app.post('/api/qpx/send-orders', async (req, res) => {
             patchBody,
             { headers: qpxHeaders(token), timeout: 15000 }
           );
-          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}, total_fees=${patchBody.total_fees}`);
+          console.log(`QPX order ${serial} patched: customer=${runtimeSettings.qpxCustomerId}${'total_fees' in patchBody ? ', total_fees=' + patchBody.total_fees : ' (auto fees)'}`);
         } catch (err) {
           console.error(`QPX patch failed for ${serial}:`, err.response?.data || err.message);
         }
