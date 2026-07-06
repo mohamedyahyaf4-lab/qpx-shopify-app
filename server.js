@@ -170,6 +170,28 @@ try {
   piiCache = {};
 }
 
+// Manual address overrides entered from the dashboard (persisted on the volume).
+// Used when a shipping address is edited in Shopify but the app can't read the
+// new value (Basic-plan PII restriction) — the merchant corrects it here.
+const OVERRIDES_FILE = path.join(DATA_DIR, 'address-overrides.json');
+let addressOverrides = {};
+try {
+  if (fs.existsSync(OVERRIDES_FILE)) {
+    addressOverrides = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf8'));
+    console.log(`Address overrides loaded: ${Object.keys(addressOverrides).length}`);
+  }
+} catch (err) {
+  console.error('Address overrides load failed:', err.message);
+  addressOverrides = {};
+}
+function saveOverrides() {
+  try {
+    fs.writeFileSync(OVERRIDES_FILE, JSON.stringify(addressOverrides));
+  } catch (err) {
+    console.error('Address overrides save failed:', err.message);
+  }
+}
+
 let piiSaveTimer = null;
 function schedulePiiSave() {
   if (piiSaveTimer) return;
@@ -323,7 +345,7 @@ function mapShopifyOrder(o) {
     shipping_price = String(o.shipping_lines.reduce((s, l) => s + (parseFloat(l.price) || 0), 0));
   }
 
-  return {
+  const mapped = {
     id: o.id,
     shopify_order_number: o.order_number,
     created_at: o.created_at,
@@ -340,6 +362,15 @@ function mapShopifyOrder(o) {
     shipping_price,
     qpx_serial: o.note_attributes?.find((n) => n.name === 'qpx_serial')?.value || null,
   };
+
+  // Manual address override entered in the dashboard takes precedence
+  const ov = addressOverrides[String(o.id)];
+  if (ov) {
+    mapped.address = ov;
+    mapped.address_full = ov;
+    mapped.address_edited = true;
+  }
+  return mapped;
 }
 
 app.get('/api/shopify/orders', async (req, res) => {
@@ -528,6 +559,24 @@ app.delete('/api/shopify/orders/:id/qpx-serial', async (req, res) => {
     console.error('Clear QPX serial error:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });
   }
+});
+
+// ─── Dashboard: Manual Address Override ───────────────────────────────────────
+
+app.post('/api/shopify/orders/:id/address', (req, res) => {
+  const { address } = req.body;
+  if (typeof address !== 'string' || !address.trim()) {
+    return res.status(400).json({ error: 'address required' });
+  }
+  addressOverrides[String(req.params.id)] = address.trim();
+  saveOverrides();
+  res.json({ success: true, address: address.trim() });
+});
+
+app.delete('/api/shopify/orders/:id/address', (req, res) => {
+  delete addressOverrides[String(req.params.id)];
+  saveOverrides();
+  res.json({ success: true });
 });
 
 // ─── QPX: Get Sent Orders ─────────────────────────────────────────────────────

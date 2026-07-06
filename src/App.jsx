@@ -131,6 +131,8 @@ export default function App() {
   const [clearingId, setClearingId] = useState(null);
   const [toast, setToast] = useState({ active: false, message: '', error: false });
   const [resultsModal, setResultsModal] = useState({ active: false, results: [] });
+  const [addrEdit, setAddrEdit] = useState({ active: false, orderId: null, orderNumber: null, value: '' });
+  const [savingAddr, setSavingAddr] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
   const [settingsForm, setSettingsForm] = useState({ qpxUsername: '', qpxPassword: '', qpxCustomerId: '' });
   const [settingsInfo, setSettingsInfo] = useState(null);
@@ -286,6 +288,42 @@ export default function App() {
     }
   }, []);
 
+  const openAddrEdit = useCallback((order) => {
+    setAddrEdit({
+      active: true,
+      orderId: order.id,
+      orderNumber: order.shopify_order_number,
+      value: order.address_full || order.address || '',
+    });
+  }, []);
+
+  const saveAddress = useCallback(async () => {
+    const { orderId, orderNumber, value } = addrEdit;
+    if (!value.trim()) return;
+    setSavingAddr(true);
+    try {
+      const res = await fetch(`/api/shopify/orders/${orderId}/address`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: value.trim() }),
+      });
+      if (!res.ok) throw new Error('فشل الحفظ');
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId
+            ? { ...o, address: value.trim(), address_full: value.trim(), address_edited: true }
+            : o
+        )
+      );
+      showToast(`✅ تم تعديل عنوان أوردر #${orderNumber}`);
+      setAddrEdit({ active: false, orderId: null, orderNumber: null, value: '' });
+    } catch (e) {
+      showToast('❌ خطأ في حفظ العنوان: ' + e.message, true);
+    } finally {
+      setSavingAddr(false);
+    }
+  }, [addrEdit]);
+
   const openSettings = useCallback(async () => {
     setSettingsModal(true);
     try {
@@ -382,15 +420,31 @@ export default function App() {
 
         {/* Address */}
         <IndexTable.Cell>
-          {order.address_full ? (
-            <Tooltip content={order.address_full}>
-              <Text as="span" variant="bodyMd">
-                {order.address_full.length > 35 ? order.address_full.substring(0, 35) + '…' : order.address_full}
-              </Text>
+          <InlineStack gap="100" blockAlign="center" wrap={false}>
+            {order.address_full ? (
+              <Tooltip content={order.address_full}>
+                <Text as="span" variant="bodyMd">
+                  {order.address_full.length > 32 ? order.address_full.substring(0, 32) + '…' : order.address_full}
+                </Text>
+              </Tooltip>
+            ) : (
+              <Text as="span" tone="subdued">—</Text>
+            )}
+            {order.address_edited && (
+              <Tooltip content="عنوان معدّل يدوياً">
+                <Badge tone="info" size="small">✎</Badge>
+              </Tooltip>
+            )}
+            <Tooltip content="تعديل العنوان">
+              <Button
+                size="micro"
+                variant="plain"
+                onClick={(e) => { e.stopPropagation(); openAddrEdit(order); }}
+              >
+                ✏️
+              </Button>
             </Tooltip>
-          ) : (
-            <Text as="span" tone="subdued">—</Text>
-          )}
+          </InlineStack>
         </IndexTable.Cell>
 
         {/* Governorate */}
@@ -637,6 +691,30 @@ export default function App() {
               autoComplete="off"
               placeholder="مثال: 1021"
             />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      {/* ── Address Edit Modal ── */}
+      <Modal
+        open={addrEdit.active}
+        onClose={() => setAddrEdit({ active: false, orderId: null, orderNumber: null, value: '' })}
+        title={`✏️ تعديل عنوان أوردر #${addrEdit.orderNumber || ''}`}
+        primaryAction={{ content: 'حفظ', onAction: saveAddress, loading: savingAddr }}
+        secondaryActions={[{ content: 'إلغاء', onAction: () => setAddrEdit({ active: false, orderId: null, orderNumber: null, value: '' }) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="200">
+            <TextField
+              label="العنوان"
+              value={addrEdit.value}
+              onChange={(v) => setAddrEdit((s) => ({ ...s, value: v }))}
+              multiline={3}
+              autoComplete="off"
+            />
+            <Text as="span" tone="subdued" variant="bodySm">
+              العنوان ده هو اللي هيتبعت لشركة الشحن بدل العنوان الأصلي.
+            </Text>
           </BlockStack>
         </Modal.Section>
       </Modal>
