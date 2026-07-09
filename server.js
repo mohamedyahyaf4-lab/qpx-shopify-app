@@ -680,15 +680,16 @@ async function cancelOrder(orderId) {
   );
 }
 
-async function runStatusSync(dryRun = false) {
+async function runStatusSync(dryRun = false, scanAll = false) {
   if (statusSyncRunning) return { skipped: 'already_running' };
   statusSyncRunning = true;
-  const summary = { dryRun, delivered: [], cancelled: [], errors: [] };
+  const summary = { dryRun, scanAll, delivered: [], cancelled: [], errors: [] };
   try {
     const token = await getQpxToken();
-    // 1) recent QPX orders → { orderNumber: deliveryStatus }
+    // 1) QPX orders → { orderNumber: deliveryStatus }  (all pages when scanAll)
     const qpxStatus = {};
-    for (let p = 1; p <= STATUS_SYNC_PAGES; p++) {
+    const maxPages = scanAll ? 400 : STATUS_SYNC_PAGES;
+    for (let p = 1; p <= maxPages; p++) {
       const r = await axios.get(
         `${QPX_BASE}/addorders/order/?rejected=0&page=${p}&page_size=50`,
         { headers: qpxHeaders(token), timeout: 20000 }
@@ -700,14 +701,22 @@ async function runStatusSync(dryRun = false) {
       if (!r.data.next) break;
     }
 
-    // 2) recent Shopify orders → state
-    const sRes = await axios.get(
-      `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=id,order_number,financial_status,fulfillment_status,tags,cancelled_at`,
-      { headers: shopHeaders(), timeout: 20000 }
-    );
+    // 2) Shopify orders → state  (paginate all when scanAll)
+    const fields = 'id,order_number,financial_status,fulfillment_status,tags,cancelled_at';
+    let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=${fields}`;
+    const shopifyOrders = [];
+    let sp = 0;
+    while (url && sp < (scanAll ? 200 : 1)) {
+      const r = await axios.get(url, { headers: shopHeaders(), timeout: 20000 });
+      shopifyOrders.push(...(r.data.orders || []));
+      sp++;
+      const link = r.headers['link'] || '';
+      const m = link.match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : null;
+    }
 
     // 3) act
-    for (const o of sRes.data.orders || []) {
+    for (const o of shopifyOrders) {
       if (o.cancelled_at) continue;
       const ds = qpxStatus[String(o.order_number)];
       if (!ds) continue;
@@ -744,9 +753,10 @@ async function runStatusSync(dryRun = false) {
   return summary;
 }
 
-// Manual trigger / test endpoint. Add ?dry=1 to preview without changing anything.
+// Manual trigger / test endpoint. ?dry=1 = preview only. ?all=1 = scan ALL orders
+// (full historical backfill) instead of just the recent window.
 app.get('/api/qpx/sync-status', async (req, res) => {
-  const result = await runStatusSync(req.query.dry === '1');
+  const result = await runStatusSync(req.query.dry === '1', req.query.all === '1');
   res.json(result);
 });
 
