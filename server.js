@@ -595,9 +595,122 @@ app.get('/api/qpx/orders', async (req, res) => {
   }
 });
 
+// ─── QPX → Shopify Status Sync ────────────────────────────────────────────────
+// Poll QPX delivery status and reflect it in Shopify:
+//   QPX status 3 (delivered/collected) → mark the Shopify order Fulfilled
+//   QPX status 5 (returned/refused/cancelled) → add the "qpx_returned" tag
+// Gated by QPX_STATUS_SYNC (enable per-store). Interval in minutes via
+// QPX_STATUS_SYNC_MIN (default 20). Recent QPX pages scanned via QPX_STATUS_PAGES.
+
+const STATUS_SYNC = process.env.QPX_STATUS_SYNC === 'true';
+const STATUS_SYNC_MIN = parseInt(process.env.QPX_STATUS_SYNC_MIN || '20');
+const STATUS_SYNC_PAGES = parseInt(process.env.QPX_STATUS_PAGES || '6');
+const RETURN_TAG = 'qpx_returned';
+let statusSyncRunning = false;
+
+async function fulfillShopifyOrder(orderId) {
+  const H = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
+  const foRes = await axios.get(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/fulfillment_orders.json`,
+    { headers: H, timeout: 15000 }
+  );
+  const open = (foRes.data.fulfillment_orders || []).filter(
+    (fo) => fo.status === 'open' || fo.status === 'in_progress'
+  );
+  if (!open.length) return 'no_open_fulfillment_order';
+  await axios.post(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/fulfillments.json`,
+    {
+      fulfillment: {
+        line_items_by_fulfillment_order: open.map((fo) => ({ fulfillment_order_id: fo.id })),
+        notify_customer: false,
+      },
+    },
+    { headers: H, timeout: 20000 }
+  );
+  return 'fulfilled';
+}
+
+async function addReturnTag(orderId, currentTags) {
+  const tags = (currentTags || '').split(',').map((t) => t.trim()).filter(Boolean);
+  if (tags.includes(RETURN_TAG)) return 'already_tagged';
+  tags.push(RETURN_TAG);
+  await axios.put(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}.json`,
+    { order: { id: orderId, tags: tags.join(',') } },
+    { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }, timeout: 15000 }
+  );
+  return 'tagged';
+}
+
+async function runStatusSync() {
+  if (statusSyncRunning) return { skipped: 'already_running' };
+  statusSyncRunning = true;
+  const summary = { fulfilled: [], returned: [], errors: [] };
+  try {
+    const token = await getQpxToken();
+    // 1) recent QPX orders → { orderNumber: deliveryStatus }
+    const qpxStatus = {};
+    for (let p = 1; p <= STATUS_SYNC_PAGES; p++) {
+      const r = await axios.get(
+        `${QPX_BASE}/addorders/order/?rejected=0&page=${p}&page_size=50`,
+        { headers: qpxHeaders(token), timeout: 20000 }
+      );
+      for (const o of r.data.results || []) {
+        const m = (o.full_name || '').match(/#(\d+)/);
+        if (m) qpxStatus[m[1]] = String(o.Order_Delivery_Status);
+      }
+      if (!r.data.next) break;
+    }
+
+    // 2) recent Shopify orders → state
+    const sRes = await axios.get(
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=id,order_number,fulfillment_status,tags,cancelled_at`,
+      { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }, timeout: 20000 }
+    );
+
+    // 3) act
+    for (const o of sRes.data.orders || []) {
+      if (o.cancelled_at) continue;
+      const ds = qpxStatus[String(o.order_number)];
+      if (!ds) continue;
+      try {
+        if (ds === '3' && o.fulfillment_status !== 'fulfilled') {
+          const r = await fulfillShopifyOrder(o.id);
+          if (r === 'fulfilled') summary.fulfilled.push(o.order_number);
+        } else if (ds === '5' && !(o.tags || '').split(',').map((t) => t.trim()).includes(RETURN_TAG)) {
+          const r = await addReturnTag(o.id, o.tags);
+          if (r === 'tagged') summary.returned.push(o.order_number);
+        }
+      } catch (err) {
+        summary.errors.push(`#${o.order_number}: ${err.response?.data ? JSON.stringify(err.response.data).substring(0, 120) : err.message}`);
+      }
+    }
+    console.log(`Status sync: fulfilled ${summary.fulfilled.length}, returned ${summary.returned.length}, errors ${summary.errors.length}`);
+    if (summary.errors.length) console.log('Status sync errors:', summary.errors.slice(0, 5).join(' | '));
+  } catch (err) {
+    console.error('Status sync failed:', err.response?.data || err.message);
+    summary.errors.push(err.message);
+  } finally {
+    statusSyncRunning = false;
+  }
+  return summary;
+}
+
+// Manual trigger / test endpoint
+app.get('/api/qpx/sync-status', async (req, res) => {
+  const result = await runStatusSync();
+  res.json(result);
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n✅ QPX-Shopify Bridge running at http://localhost:${PORT}\n`);
+  if (STATUS_SYNC) {
+    console.log(`⏱️  QPX→Shopify status sync ON (every ${STATUS_SYNC_MIN} min, ${STATUS_SYNC_PAGES} QPX pages)`);
+    setTimeout(runStatusSync, 30000); // first run shortly after boot
+    setInterval(runStatusSync, STATUS_SYNC_MIN * 60 * 1000);
+  }
 });
