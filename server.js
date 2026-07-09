@@ -643,10 +643,10 @@ async function addReturnTag(orderId, currentTags) {
   return 'tagged';
 }
 
-async function runStatusSync() {
+async function runStatusSync(dryRun = false) {
   if (statusSyncRunning) return { skipped: 'already_running' };
   statusSyncRunning = true;
-  const summary = { fulfilled: [], returned: [], errors: [] };
+  const summary = { dryRun, fulfilled: [], returned: [], errors: [] };
   try {
     const token = await getQpxToken();
     // 1) recent QPX orders → { orderNumber: deliveryStatus }
@@ -676,9 +676,11 @@ async function runStatusSync() {
       if (!ds) continue;
       try {
         if (ds === '3' && o.fulfillment_status !== 'fulfilled') {
+          if (dryRun) { summary.fulfilled.push(o.order_number); continue; }
           const r = await fulfillShopifyOrder(o.id);
           if (r === 'fulfilled') summary.fulfilled.push(o.order_number);
         } else if (ds === '5' && !(o.tags || '').split(',').map((t) => t.trim()).includes(RETURN_TAG)) {
+          if (dryRun) { summary.returned.push(o.order_number); continue; }
           const r = await addReturnTag(o.id, o.tags);
           if (r === 'tagged') summary.returned.push(o.order_number);
         }
@@ -697,9 +699,9 @@ async function runStatusSync() {
   return summary;
 }
 
-// Manual trigger / test endpoint
+// Manual trigger / test endpoint. Add ?dry=1 to preview without changing anything.
 app.get('/api/qpx/sync-status', async (req, res) => {
-  const result = await runStatusSync();
+  const result = await runStatusSync(req.query.dry === '1');
   res.json(result);
 });
 
