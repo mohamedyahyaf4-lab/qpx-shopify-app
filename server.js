@@ -612,6 +612,20 @@ function shopHeaders() {
   return { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Retry once on Shopify 429 (rate limit), honoring Retry-After — helps large backfills.
+axios.interceptors.response.use(undefined, async (error) => {
+  const cfg = error.config;
+  if (error.response?.status === 429 && cfg && !cfg._retried429) {
+    cfg._retried429 = true;
+    const wait = (parseFloat(error.response.headers?.['retry-after'] || '2') || 2) * 1000;
+    await sleep(wait);
+    return axios(cfg);
+  }
+  return Promise.reject(error);
+});
+
 // Return an existing fulfillment id, creating one (fulfilling the order) if needed.
 async function getOrCreateFulfillment(orderId) {
   const H = shopHeaders();
@@ -741,6 +755,7 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       } catch (err) {
         summary.errors.push(`#${o.order_number}: ${err.response?.data ? JSON.stringify(err.response.data).substring(0, 120) : err.message}`);
       }
+      if (!dryRun && scanAll) await sleep(250); // throttle the big backfill
     }
     console.log(`Status sync: delivered ${summary.delivered.length}, cancelled ${summary.cancelled.length}, errors ${summary.errors.length}`);
     if (summary.errors.length) console.log('Status sync errors:', summary.errors.slice(0, 5).join(' | '));
