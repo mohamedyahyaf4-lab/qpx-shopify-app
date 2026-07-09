@@ -597,19 +597,30 @@ app.get('/api/qpx/orders', async (req, res) => {
 
 // ─── QPX → Shopify Status Sync ────────────────────────────────────────────────
 // Poll QPX delivery status and reflect it in Shopify:
-//   QPX status 3 (delivered/collected) → mark the Shopify order Fulfilled
-//   QPX status 5 (returned/refused/cancelled) → add the "qpx_returned" tag
+//   QPX status 3 (delivered/collected, incl. partial) → Mark Delivered + Mark Paid
+//   QPX status 5 (returned/refused/cancelled)         → Cancel order (restock)
 // Gated by QPX_STATUS_SYNC (enable per-store). Interval in minutes via
 // QPX_STATUS_SYNC_MIN (default 20). Recent QPX pages scanned via QPX_STATUS_PAGES.
 
 const STATUS_SYNC = process.env.QPX_STATUS_SYNC === 'true';
 const STATUS_SYNC_MIN = parseInt(process.env.QPX_STATUS_SYNC_MIN || '20');
 const STATUS_SYNC_PAGES = parseInt(process.env.QPX_STATUS_PAGES || '6');
-const RETURN_TAG = 'qpx_returned';
+const DELIVERED_TAG = 'qpx_delivered'; // idempotency marker for the delivered+paid step
 let statusSyncRunning = false;
 
-async function fulfillShopifyOrder(orderId) {
-  const H = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
+function shopHeaders() {
+  return { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
+}
+
+// Return an existing fulfillment id, creating one (fulfilling the order) if needed.
+async function getOrCreateFulfillment(orderId) {
+  const H = shopHeaders();
+  const fRes = await axios.get(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/fulfillments.json`,
+    { headers: H, timeout: 15000 }
+  );
+  const existing = (fRes.data.fulfillments || []).find((f) => f.status === 'success');
+  if (existing) return existing.id;
   const foRes = await axios.get(
     `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/fulfillment_orders.json`,
     { headers: H, timeout: 15000 }
@@ -617,36 +628,62 @@ async function fulfillShopifyOrder(orderId) {
   const open = (foRes.data.fulfillment_orders || []).filter(
     (fo) => fo.status === 'open' || fo.status === 'in_progress'
   );
-  if (!open.length) return 'no_open_fulfillment_order';
-  await axios.post(
+  if (!open.length) return null;
+  const cRes = await axios.post(
     `https://${SHOPIFY_STORE}/admin/api/2024-01/fulfillments.json`,
-    {
-      fulfillment: {
-        line_items_by_fulfillment_order: open.map((fo) => ({ fulfillment_order_id: fo.id })),
-        notify_customer: false,
-      },
-    },
+    { fulfillment: { line_items_by_fulfillment_order: open.map((fo) => ({ fulfillment_order_id: fo.id })), notify_customer: false } },
     { headers: H, timeout: 20000 }
   );
-  return 'fulfilled';
+  return cRes.data.fulfillment?.id || null;
 }
 
-async function addReturnTag(orderId, currentTags) {
+// Mark the order's shipment as Delivered (fulfilling first if not yet fulfilled).
+async function markDelivered(orderId) {
+  const fid = await getOrCreateFulfillment(orderId);
+  if (!fid) return 'no_fulfillment';
+  await axios.post(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/fulfillments/${fid}/events.json`,
+    { event: { status: 'delivered' } },
+    { headers: shopHeaders(), timeout: 15000 }
+  );
+  return 'delivered';
+}
+
+// Mark the order as Paid (captures the outstanding COD balance).
+async function markPaid(orderId) {
+  const q = `mutation { orderMarkAsPaid(input: {id: "gid://shopify/Order/${orderId}"}) { userErrors { field message } } }`;
+  const r = await axios.post(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`,
+    { query: q },
+    { headers: shopHeaders(), timeout: 15000 }
+  );
+  const errs = r.data?.data?.orderMarkAsPaid?.userErrors || r.data?.errors || [];
+  if (errs.length) throw new Error('markPaid ' + JSON.stringify(errs).substring(0, 120));
+}
+
+async function addTag(orderId, currentTags, tag) {
   const tags = (currentTags || '').split(',').map((t) => t.trim()).filter(Boolean);
-  if (tags.includes(RETURN_TAG)) return 'already_tagged';
-  tags.push(RETURN_TAG);
+  if (tags.includes(tag)) return;
+  tags.push(tag);
   await axios.put(
     `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}.json`,
     { order: { id: orderId, tags: tags.join(',') } },
-    { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }, timeout: 15000 }
+    { headers: shopHeaders(), timeout: 15000 }
   );
-  return 'tagged';
+}
+
+async function cancelOrder(orderId) {
+  await axios.post(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/cancel.json`,
+    { reason: 'customer', restock: true, email: false },
+    { headers: shopHeaders(), timeout: 20000 }
+  );
 }
 
 async function runStatusSync(dryRun = false) {
   if (statusSyncRunning) return { skipped: 'already_running' };
   statusSyncRunning = true;
-  const summary = { dryRun, fulfilled: [], returned: [], errors: [] };
+  const summary = { dryRun, delivered: [], cancelled: [], errors: [] };
   try {
     const token = await getQpxToken();
     // 1) recent QPX orders → { orderNumber: deliveryStatus }
@@ -665,8 +702,8 @@ async function runStatusSync(dryRun = false) {
 
     // 2) recent Shopify orders → state
     const sRes = await axios.get(
-      `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=id,order_number,fulfillment_status,tags,cancelled_at`,
-      { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN }, timeout: 20000 }
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=id,order_number,financial_status,fulfillment_status,tags,cancelled_at`,
+      { headers: shopHeaders(), timeout: 20000 }
     );
 
     // 3) act
@@ -674,21 +711,29 @@ async function runStatusSync(dryRun = false) {
       if (o.cancelled_at) continue;
       const ds = qpxStatus[String(o.order_number)];
       if (!ds) continue;
+      const tags = (o.tags || '').split(',').map((t) => t.trim());
       try {
-        if (ds === '3' && o.fulfillment_status !== 'fulfilled') {
-          if (dryRun) { summary.fulfilled.push(o.order_number); continue; }
-          const r = await fulfillShopifyOrder(o.id);
-          if (r === 'fulfilled') summary.fulfilled.push(o.order_number);
-        } else if (ds === '5' && !(o.tags || '').split(',').map((t) => t.trim()).includes(RETURN_TAG)) {
-          if (dryRun) { summary.returned.push(o.order_number); continue; }
-          const r = await addReturnTag(o.id, o.tags);
-          if (r === 'tagged') summary.returned.push(o.order_number);
+        if (ds === '3' && !tags.includes(DELIVERED_TAG)) {
+          // delivered (incl. partial) → mark delivered + mark paid
+          if (dryRun) { summary.delivered.push(o.order_number); continue; }
+          await markDelivered(o.id);
+          if (o.financial_status !== 'paid') {
+            try { await markPaid(o.id); }
+            catch (e) { summary.errors.push(`#${o.order_number} paid: ${e.message}`); }
+          }
+          await addTag(o.id, o.tags, DELIVERED_TAG);
+          summary.delivered.push(o.order_number);
+        } else if (ds === '5') {
+          // returned/refused → cancel
+          if (dryRun) { summary.cancelled.push(o.order_number); continue; }
+          await cancelOrder(o.id);
+          summary.cancelled.push(o.order_number);
         }
       } catch (err) {
         summary.errors.push(`#${o.order_number}: ${err.response?.data ? JSON.stringify(err.response.data).substring(0, 120) : err.message}`);
       }
     }
-    console.log(`Status sync: fulfilled ${summary.fulfilled.length}, returned ${summary.returned.length}, errors ${summary.errors.length}`);
+    console.log(`Status sync: delivered ${summary.delivered.length}, cancelled ${summary.cancelled.length}, errors ${summary.errors.length}`);
     if (summary.errors.length) console.log('Status sync errors:', summary.errors.slice(0, 5).join(' | '));
   } catch (err) {
     console.error('Status sync failed:', err.response?.data || err.message);
