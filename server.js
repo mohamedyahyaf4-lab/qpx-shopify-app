@@ -675,10 +675,13 @@ async function markPaid(orderId) {
   if (errs.length) throw new Error('markPaid ' + JSON.stringify(errs).substring(0, 120));
 }
 
-async function addTag(orderId, currentTags, tag) {
+async function addTags(orderId, currentTags, newTags) {
   const tags = (currentTags || '').split(',').map((t) => t.trim()).filter(Boolean);
-  if (tags.includes(tag)) return;
-  tags.push(tag);
+  let changed = false;
+  for (const t of newTags) {
+    if (t && !tags.includes(t)) { tags.push(t); changed = true; }
+  }
+  if (!changed) return;
   await axios.put(
     `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}.json`,
     { order: { id: orderId, tags: tags.join(',') } },
@@ -710,7 +713,7 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       );
       for (const o of r.data.results || []) {
         const m = (o.full_name || '').match(/#(\d+)/);
-        if (m) qpxStatus[m[1]] = String(o.Order_Delivery_Status);
+        if (m) qpxStatus[m[1]] = { ds: String(o.Order_Delivery_Status), amount: Math.round(parseFloat(o.total_amount) || 0) };
       }
       if (!r.data.next) break;
     }
@@ -732,19 +735,20 @@ async function runStatusSync(dryRun = false, scanAll = false) {
     // 3) act
     for (const o of shopifyOrders) {
       if (o.cancelled_at) continue;
-      const ds = qpxStatus[String(o.order_number)];
-      if (!ds) continue;
+      const info = qpxStatus[String(o.order_number)];
+      if (!info) continue;
+      const ds = info.ds;
       const tags = (o.tags || '').split(',').map((t) => t.trim());
       try {
         if (ds === '3' && !tags.includes(DELIVERED_TAG)) {
-          // delivered (incl. partial) → mark delivered + mark paid
+          // delivered (incl. partial) → mark delivered + mark paid + collection-amount tag
           if (dryRun) { summary.delivered.push(o.order_number); continue; }
           await markDelivered(o.id);
           if (o.financial_status !== 'paid') {
             try { await markPaid(o.id); }
             catch (e) { summary.errors.push(`#${o.order_number} paid: ${e.message}`); }
           }
-          await addTag(o.id, o.tags, DELIVERED_TAG);
+          await addTags(o.id, o.tags, [DELIVERED_TAG, `تحصيل ${info.amount}`]);
           summary.delivered.push(o.order_number);
         } else if (ds === '5') {
           // returned/refused → cancel
