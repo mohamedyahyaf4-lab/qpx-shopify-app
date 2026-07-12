@@ -750,11 +750,17 @@ async function runStatusSync(dryRun = false, scanAll = false) {
           }
           await addTags(o.id, o.tags, [DELIVERED_TAG, `تحصيل ${info.amount}`]);
           summary.delivered.push(o.order_number);
-        } else if (ds === '5') {
-          // returned/refused → cancel
+        } else if (ds === '5' && !tags.includes('qpx_returned')) {
+          // returned/refused → cancel. Paid orders can't be cancelled without a
+          // refund (Shopify 422) — flag those with qpx_returned for manual handling.
           if (dryRun) { summary.cancelled.push(o.order_number); continue; }
-          await cancelOrder(o.id);
-          summary.cancelled.push(o.order_number);
+          try {
+            await cancelOrder(o.id);
+            summary.cancelled.push(o.order_number);
+          } catch (e) {
+            await addTags(o.id, o.tags, ['qpx_returned']);
+            summary.errors.push(`#${o.order_number} cancel-failed (paid) → tagged qpx_returned`);
+          }
         }
       } catch (err) {
         summary.errors.push(`#${o.order_number}: ${err.response?.data ? JSON.stringify(err.response.data).substring(0, 120) : err.message}`);
