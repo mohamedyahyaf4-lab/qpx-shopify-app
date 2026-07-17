@@ -66,11 +66,13 @@ let runtimeSettings = {
   qpxUsername: process.env.QPX_USERNAME || '',
   qpxPassword: process.env.QPX_PASSWORD || '',
   qpxCustomerId: parseInt(process.env.QPX_CUSTOMER_ID || '1021'),
-  // Per-store toggles. Andmore: street-only address + zero fees.
-  // It's Sunglasses: match the Shopify shipping charge as the QPX fee.
+  // Per-store toggles. Andmore: street-only address.
+  // Fees: zero (Andmore original) or match the Shopify shipping charge.
   qpxStreetAddress: process.env.QPX_STREET_ADDRESS === 'true',
   qpxZeroFees: process.env.QPX_ZERO_FEES === 'true',
   qpxMatchShipping: process.env.QPX_MATCH_SHIPPING === 'true',
+  // Send the Shopify order number in QPX referenceID instead of the notes field.
+  qpxRefCode: process.env.QPX_REF_CODE === 'true',
 };
 
 let qpxToken = null;
@@ -475,7 +477,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
         ...(order.qpx_city_id ? { city: order.qpx_city_id } : {}),
         customer: runtimeSettings.qpxCustomerId,
         total_amount: isPaid ? 0 : (parseFloat(order.total_price) || 0),
-        notes: `Shopify Order #${order.shopify_order_number}${isPaid ? ' (مدفوع مسبقاً)' : ''}`,
+        // qpxRefCode stores the order number in referenceID and keeps notes clean.
+        ...(runtimeSettings.qpxRefCode ? { referenceID: String(order.shopify_order_number) } : {}),
+        notes: runtimeSettings.qpxRefCode
+          ? (isPaid ? 'مدفوع مسبقاً' : '')
+          : `Shopify Order #${order.shopify_order_number}${isPaid ? ' (مدفوع مسبقاً)' : ''}`,
         order_date: new Date().toISOString(),
       };
 
