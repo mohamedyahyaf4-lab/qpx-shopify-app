@@ -797,6 +797,69 @@ app.get('/api/qpx/sync-status', async (req, res) => {
   res.json(result);
 });
 
+// Cleanup: undo orders wrongly marked delivered when QPX had NOT actually collected
+// (ds=3 = out-for-delivery, not delivered). Removes qpx_delivered + collection tag and
+// reverts the shipment status to "out for delivery". Leaves the Paid flag untouched.
+async function cleanupWrongDelivered(dryRun = false, scanAll = false) {
+  if (statusSyncRunning) return { skipped: 'already_running' };
+  statusSyncRunning = true;
+  const summary = { dryRun, scanAll, cleaned: [], errors: [] };
+  try {
+    const token = await getQpxToken();
+    const collectedMap = {};
+    const maxPages = scanAll ? 400 : STATUS_SYNC_PAGES;
+    for (let p = 1; p <= maxPages; p++) {
+      const r = await axios.get(`${QPX_BASE}/addorders/order/?rejected=0&page=${p}&page_size=50`, { headers: qpxHeaders(token), timeout: 20000 });
+      for (const o of r.data.results || []) {
+        const m = (o.full_name || '').match(/#(\d+)/);
+        if (m) collectedMap[m[1]] = o.Order_Collect_Status === true;
+      }
+      if (!r.data.next) break;
+    }
+    let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=id,order_number,tags,cancelled_at`;
+    const orders = [];
+    let sp = 0;
+    while (url && sp < (scanAll ? 200 : 1)) {
+      const r = await axios.get(url, { headers: shopHeaders(), timeout: 20000 });
+      orders.push(...(r.data.orders || []));
+      sp++;
+      const link = r.headers['link'] || '';
+      const m = link.match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : null;
+    }
+    for (const o of orders) {
+      const tags = (o.tags || '').split(',').map((t) => t.trim());
+      if (!tags.includes(DELIVERED_TAG)) continue;
+      if (collectedMap[String(o.order_number)] !== false) continue; // keep if collected or unknown
+      if (dryRun) { summary.cleaned.push(o.order_number); continue; }
+      try {
+        const newTags = tags.filter((t) => t && t !== DELIVERED_TAG && !t.startsWith('تحصيل'));
+        await axios.put(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${o.id}.json`, { order: { id: o.id, tags: newTags.join(',') } }, { headers: shopHeaders(), timeout: 15000 });
+        const fRes = await axios.get(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${o.id}/fulfillments.json`, { headers: shopHeaders(), timeout: 15000 });
+        const fid = (fRes.data.fulfillments || []).find((f) => f.status === 'success')?.id;
+        if (fid) {
+          await axios.post(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${o.id}/fulfillments/${fid}/events.json`, { event: { status: 'out_for_delivery' } }, { headers: shopHeaders(), timeout: 15000 });
+        }
+        summary.cleaned.push(o.order_number);
+      } catch (err) {
+        summary.errors.push(`#${o.order_number}: ${err.response?.data ? JSON.stringify(err.response.data).substring(0, 100) : err.message}`);
+      }
+      await sleep(200);
+    }
+    console.log(`Cleanup wrong-delivered: cleaned ${summary.cleaned.length}, errors ${summary.errors.length}`);
+  } catch (err) {
+    console.error('Cleanup failed:', err.response?.data || err.message);
+    summary.errors.push(err.message);
+  } finally {
+    statusSyncRunning = false;
+  }
+  return summary;
+}
+
+app.get('/api/qpx/cleanup', async (req, res) => {
+  res.json(await cleanupWrongDelivered(req.query.dry === '1', req.query.all === '1'));
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
