@@ -727,8 +727,10 @@ async function runStatusSync(dryRun = false, scanAll = false) {
   const summary = { dryRun, scanAll, delivered: [], cancelled: [], errors: [] };
   try {
     const token = await getQpxToken();
-    // 1) QPX orders → { orderNumber: deliveryStatus }  (all pages when scanAll)
-    const qpxStatus = {};
+    // 1) QPX orders keyed by SERIAL (never by "#N in full_name" — order numbers
+    // repeat across resends/old rows and the paginated list reshuffles while
+    // being read, which once caused wrong matches → wrong paid/delivered marks).
+    const qpxBySerial = {};
     const maxPages = scanAll ? 400 : STATUS_SYNC_PAGES;
     for (let p = 1; p <= maxPages; p++) {
       const r = await axios.get(
@@ -736,8 +738,8 @@ async function runStatusSync(dryRun = false, scanAll = false) {
         { headers: qpxHeaders(token), timeout: 20000 }
       );
       for (const o of r.data.results || []) {
-        const m = (o.full_name || '').match(/#(\d+)/);
-        if (m) qpxStatus[m[1]] = {
+        if (!o.serial) continue;
+        qpxBySerial[String(o.serial)] = {
           ds: String(o.Order_Delivery_Status),
           amount: Math.round(parseFloat(o.total_amount) || 0),
           // TRUE delivery signal: QPX collected the COD money. ds=3 alone only
@@ -746,6 +748,21 @@ async function runStatusSync(dryRun = false, scanAll = false) {
         };
       }
       if (!r.data.next) break;
+    }
+
+    // Authoritative re-check straight from QPX before ANY write action — the
+    // paginated list can serve stale rows, a direct GET by serial cannot.
+    async function verifyQpx(serial) {
+      const r = await axios.get(`${QPX_BASE}/addorders/order/${serial}/`, {
+        headers: qpxHeaders(token), timeout: 15000,
+      });
+      const o = r.data || {};
+      if (!o.serial && !o.full_name) return null;
+      return {
+        ds: String(o.Order_Delivery_Status),
+        amount: Math.round(parseFloat(o.total_amount) || 0),
+        collected: o.Order_Collect_Status === true,
+      };
     }
 
     // 2) Shopify orders → state  (paginate all when scanAll)
@@ -762,14 +779,25 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       url = m ? m[1] : null;
     }
 
-    // 3) act
+    // 3) act — match Shopify→QPX ONLY via the qpx_<serial> tag written at send time.
+    // Orders without a serial tag are skipped entirely (never name-matched).
     for (const o of shopifyOrders) {
-      const info = qpxStatus[String(o.order_number)];
-      if (!info) continue;
-      const ds = info.ds;
       const tags = (o.tags || '').split(',').map((t) => t.trim());
+      const serialTag = tags.find((t) => /^qpx_\d+$/.test(t));
+      if (!serialTag) continue;
+      const serial = serialTag.slice(4);
+      const listed = qpxBySerial[serial];
+      if (!listed) continue;
       const isCancelled = !!o.cancelled_at;
+      // Cheap pre-filter from the list scan; every write below re-verifies via GET.
+      const wantsDeliver = listed.collected && !tags.includes(DELIVERED_TAG);
+      const wantsReturn = listed.ds === '5' && !tags.includes('qpx_returned') && !tags.includes('مرتجع');
+      if (!wantsDeliver && !wantsReturn) continue;
       try {
+        const info = dryRun ? listed : await verifyQpx(serial);
+        if (!info) continue;
+        const ds = info.ds;
+
         if (isCancelled) {
           // Shopify blocks fulfill/mark-paid/re-cancel on a cancelled order. The only
           // safe action is adding tracking tags. Other stores skip cancelled orders.
