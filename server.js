@@ -719,7 +719,13 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       );
       for (const o of r.data.results || []) {
         const m = (o.full_name || '').match(/#(\d+)/);
-        if (m) qpxStatus[m[1]] = { ds: String(o.Order_Delivery_Status), amount: Math.round(parseFloat(o.total_amount) || 0) };
+        if (m) qpxStatus[m[1]] = {
+          ds: String(o.Order_Delivery_Status),
+          amount: Math.round(parseFloat(o.total_amount) || 0),
+          // TRUE delivery signal: QPX collected the COD money. ds=3 alone only
+          // means "out for delivery / assigned to courier", NOT delivered.
+          collected: o.Order_Collect_Status === true,
+        };
       }
       if (!r.data.next) break;
     }
@@ -746,8 +752,8 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       const ds = info.ds;
       const tags = (o.tags || '').split(',').map((t) => t.trim());
       try {
-        if (ds === '3' && !tags.includes(DELIVERED_TAG)) {
-          // delivered (incl. partial) → mark delivered + mark paid + collection-amount tag
+        if (info.collected && !tags.includes(DELIVERED_TAG)) {
+          // Actually delivered (COD money collected) → mark delivered + paid + collection tag
           if (dryRun) { summary.delivered.push(o.order_number); continue; }
           await markDelivered(o.id);
           if (o.financial_status !== 'paid') {
