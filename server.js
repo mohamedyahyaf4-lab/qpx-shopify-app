@@ -611,8 +611,26 @@ app.get('/api/qpx/orders', async (req, res) => {
 const STATUS_SYNC = process.env.QPX_STATUS_SYNC === 'true';
 const STATUS_SYNC_MIN = parseInt(process.env.QPX_STATUS_SYNC_MIN || '20');
 const STATUS_SYNC_PAGES = parseInt(process.env.QPX_STATUS_PAGES || '6');
+// How many 250-order Shopify pages the recurring (non-backfill) sync revisits each run.
+// Default 1 (recent orders only). Andmore uses a higher value so its old cancelled
+// orders keep getting re-checked and tagged when QPX finally delivers them.
+const STATUS_SHOP_PAGES = parseInt(process.env.QPX_STATUS_SHOP_PAGES || '1');
 const DELIVERED_TAG = 'qpx_delivered'; // idempotency marker for the delivered+paid step
+// Andmore-only safety flags (default OFF → other two stores are unaffected):
+//   QPX_NO_CANCEL      never auto-cancel an order; tag returns "مرتجع" for manual review
+//   QPX_TAG_CANCELLED  handle already-cancelled orders as TAG-ONLY (Shopify blocks
+//                      fulfill/mark-paid on cancelled orders, so we only add tracking tags)
+const NO_CANCEL = process.env.QPX_NO_CANCEL === 'true';
+const TAG_CANCELLED = process.env.QPX_TAG_CANCELLED === 'true';
 let statusSyncRunning = false;
+
+// Tags applied to a delivered+collected order. Friendly Arabic status tags are added
+// only where TAG_CANCELLED is on (Andmore), leaving the other stores' tags unchanged.
+function deliveredTags(amount) {
+  const t = [DELIVERED_TAG, `تحصيل ${amount}`];
+  if (TAG_CANCELLED) t.push('تم التسليم', 'تم التحصيل');
+  return t;
+}
 
 function shopHeaders() {
   return { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
@@ -735,7 +753,7 @@ async function runStatusSync(dryRun = false, scanAll = false) {
     let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?limit=250&status=any&fields=${fields}`;
     const shopifyOrders = [];
     let sp = 0;
-    while (url && sp < (scanAll ? 200 : 1)) {
+    while (url && sp < (scanAll ? 200 : STATUS_SHOP_PAGES)) {
       const r = await axios.get(url, { headers: shopHeaders(), timeout: 20000 });
       shopifyOrders.push(...(r.data.orders || []));
       sp++;
@@ -746,32 +764,51 @@ async function runStatusSync(dryRun = false, scanAll = false) {
 
     // 3) act
     for (const o of shopifyOrders) {
-      if (o.cancelled_at) continue;
       const info = qpxStatus[String(o.order_number)];
       if (!info) continue;
       const ds = info.ds;
       const tags = (o.tags || '').split(',').map((t) => t.trim());
+      const isCancelled = !!o.cancelled_at;
       try {
+        if (isCancelled) {
+          // Shopify blocks fulfill/mark-paid/re-cancel on a cancelled order. The only
+          // safe action is adding tracking tags. Other stores skip cancelled orders.
+          if (!TAG_CANCELLED) continue;
+          if (info.collected && !tags.includes(DELIVERED_TAG)) {
+            if (dryRun) { summary.delivered.push(o.order_number); continue; }
+            await addTags(o.id, o.tags, deliveredTags(info.amount)); // TAG-ONLY, never throws on cancelled
+            summary.delivered.push(o.order_number);
+          }
+          if (!dryRun && scanAll) await sleep(250);
+          continue; // never fulfill / pay / cancel a cancelled order
+        }
+
         if (info.collected && !tags.includes(DELIVERED_TAG)) {
-          // Actually delivered (COD money collected) → mark delivered + paid + collection tag
+          // Actually delivered (COD money collected) → mark delivered + paid + collection tags
           if (dryRun) { summary.delivered.push(o.order_number); continue; }
-          await markDelivered(o.id);
+          try { await markDelivered(o.id); }
+          catch (e) { summary.errors.push(`#${o.order_number} deliver: ${e.message}`); }
           if (o.financial_status !== 'paid') {
             try { await markPaid(o.id); }
             catch (e) { summary.errors.push(`#${o.order_number} paid: ${e.message}`); }
           }
-          await addTags(o.id, o.tags, [DELIVERED_TAG, `تحصيل ${info.amount}`]);
+          await addTags(o.id, o.tags, deliveredTags(info.amount));
           summary.delivered.push(o.order_number);
-        } else if (ds === '5' && !tags.includes('qpx_returned')) {
-          // returned/refused → cancel. Paid orders can't be cancelled without a
-          // refund (Shopify 422) — flag those with qpx_returned for manual handling.
+        } else if (ds === '5' && !tags.includes('qpx_returned') && !tags.includes('مرتجع')) {
+          // Returned/refused. NO_CANCEL (Andmore) → tag "مرتجع" for manual review, never
+          // auto-cancel. Other stores → cancel (paid orders 422 → tag qpx_returned instead).
           if (dryRun) { summary.cancelled.push(o.order_number); continue; }
-          try {
-            await cancelOrder(o.id);
+          if (NO_CANCEL) {
+            await addTags(o.id, o.tags, ['مرتجع']);
             summary.cancelled.push(o.order_number);
-          } catch (e) {
-            await addTags(o.id, o.tags, ['qpx_returned']);
-            summary.errors.push(`#${o.order_number} cancel-failed (paid) → tagged qpx_returned`);
+          } else {
+            try {
+              await cancelOrder(o.id);
+              summary.cancelled.push(o.order_number);
+            } catch (e) {
+              await addTags(o.id, o.tags, ['qpx_returned']);
+              summary.errors.push(`#${o.order_number} cancel-failed (paid) → tagged qpx_returned`);
+            }
           }
         }
       } catch (err) {
