@@ -519,6 +519,11 @@ app.post('/api/qpx/send-orders', async (req, res) => {
 
       if (serial) {
         await saveQpxSerialToShopify(order.id, order.shopify_order_number, serial);
+        // Sent to the courier = shipped → mark the Shopify order Fulfilled right away.
+        if (process.env.QPX_FULFILL_ON_SEND === 'true') {
+          try { await getOrCreateFulfillment(order.id); }
+          catch (err) { console.error(`Fulfill-on-send failed for #${order.shopify_order_number}:`, err.response?.data || err.message); }
+        }
       }
 
       results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'success', qpx_serial: serial });
