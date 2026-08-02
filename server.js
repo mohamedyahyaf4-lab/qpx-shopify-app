@@ -629,13 +629,8 @@ const NO_CANCEL = process.env.QPX_NO_CANCEL === 'true';
 const TAG_CANCELLED = process.env.QPX_TAG_CANCELLED === 'true';
 let statusSyncRunning = false;
 
-// Tags applied to a delivered+collected order. Friendly Arabic status tags are added
-// only where TAG_CANCELLED is on (Andmore), leaving the other stores' tags unchanged.
-function deliveredTags(amount) {
-  const t = [DELIVERED_TAG, `تحصيل ${amount}`];
-  if (TAG_CANCELLED) t.push('تم التسليم', 'تم التحصيل');
-  return t;
-}
+// Stage-2 idempotency marker: QPX has SETTLED the COD money with the courier.
+const COLLECTED_TAG = 'qpx_collected';
 
 function shopHeaders() {
   return { 'X-Shopify-Access-Token': SHOPIFY_TOKEN };
@@ -747,8 +742,12 @@ async function runStatusSync(dryRun = false, scanAll = false) {
         qpxBySerial[String(o.serial)] = {
           ds: String(o.Order_Delivery_Status),
           amount: Math.round(parseFloat(o.total_amount) || 0),
-          // TRUE delivery signal: QPX collected the COD money. ds=3 alone only
-          // means "out for delivery / assigned to courier", NOT delivered.
+          // Two QPX money stages (ds=3 alone only means "out with the courier"):
+          //   Collected_shipper    = courier took the cash from the customer —
+          //                          happens ON the actual delivery day.
+          //   Order_Collect_Status = QPX settled with the courier — batched days
+          //                          later, when partial-delivery amounts are final.
+          delivered: o.Collected_shipper === true,
           collected: o.Order_Collect_Status === true,
         };
       }
@@ -766,6 +765,7 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       return {
         ds: String(o.Order_Delivery_Status),
         amount: Math.round(parseFloat(o.total_amount) || 0),
+        delivered: o.Collected_shipper === true,
         collected: o.Order_Collect_Status === true,
       };
     }
@@ -795,37 +795,55 @@ async function runStatusSync(dryRun = false, scanAll = false) {
       if (!listed) continue;
       const isCancelled = !!o.cancelled_at;
       // Cheap pre-filter from the list scan; every write below re-verifies via GET.
-      const wantsDeliver = listed.collected && !tags.includes(DELIVERED_TAG);
+      // (تحصيل-tag check keeps orders tagged by the old single-stage flow untouched.)
+      const hasCollectMark = tags.includes(COLLECTED_TAG) || tags.some((t) => t.startsWith('تحصيل'));
+      const wantsDeliver = listed.delivered && !tags.includes(DELIVERED_TAG);
+      const wantsCollect = listed.collected && !hasCollectMark;
       const wantsReturn = listed.ds === '5' && !tags.includes('qpx_returned') && !tags.includes('مرتجع');
-      if (!wantsDeliver && !wantsReturn) continue;
+      if (!wantsDeliver && !wantsCollect && !wantsReturn) continue;
       try {
         const info = dryRun ? listed : await verifyQpx(serial);
         if (!info) continue;
         const ds = info.ds;
 
+        // Stage 1 — courier collected from the customer = actually delivered (same day).
+        // Stage 2 — QPX settled with the courier = money final → paid + collection amount.
+        const deliverNow = info.delivered && !tags.includes(DELIVERED_TAG);
+        const collectNow = info.collected && !hasCollectMark;
+        const newTags = [];
+        if (deliverNow) {
+          newTags.push(DELIVERED_TAG);
+          if (TAG_CANCELLED) newTags.push('تم التسليم');
+        }
+        if (collectNow) {
+          newTags.push(COLLECTED_TAG, `تحصيل ${info.amount}`);
+          if (TAG_CANCELLED) newTags.push('تم التحصيل');
+        }
+
         if (isCancelled) {
           // Shopify blocks fulfill/mark-paid/re-cancel on a cancelled order. The only
           // safe action is adding tracking tags. Other stores skip cancelled orders.
           if (!TAG_CANCELLED) continue;
-          if (info.collected && !tags.includes(DELIVERED_TAG)) {
+          if (newTags.length) {
             if (dryRun) { summary.delivered.push(o.order_number); continue; }
-            await addTags(o.id, o.tags, deliveredTags(info.amount)); // TAG-ONLY, never throws on cancelled
+            await addTags(o.id, o.tags, newTags); // TAG-ONLY, never throws on cancelled
             summary.delivered.push(o.order_number);
           }
           if (!dryRun && scanAll) await sleep(250);
           continue; // never fulfill / pay / cancel a cancelled order
         }
 
-        if (info.collected && !tags.includes(DELIVERED_TAG)) {
-          // Actually delivered (COD money collected) → mark delivered + paid + collection tags
+        if (deliverNow || collectNow) {
           if (dryRun) { summary.delivered.push(o.order_number); continue; }
-          try { await markDelivered(o.id); }
-          catch (e) { summary.errors.push(`#${o.order_number} deliver: ${e.message}`); }
-          if (o.financial_status !== 'paid') {
+          if (deliverNow) {
+            try { await markDelivered(o.id); }
+            catch (e) { summary.errors.push(`#${o.order_number} deliver: ${e.message}`); }
+          }
+          if (collectNow && o.financial_status !== 'paid') {
             try { await markPaid(o.id); }
             catch (e) { summary.errors.push(`#${o.order_number} paid: ${e.message}`); }
           }
-          await addTags(o.id, o.tags, deliveredTags(info.amount));
+          await addTags(o.id, o.tags, newTags);
           summary.delivered.push(o.order_number);
         } else if (ds === '5' && !tags.includes('qpx_returned') && !tags.includes('مرتجع')) {
           // Returned/refused. NO_CANCEL (Andmore) → tag "مرتجع" for manual review, never
