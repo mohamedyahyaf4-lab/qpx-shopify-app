@@ -58,7 +58,34 @@ app.get('*', (req, res, next) => {
 });
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+let SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+
+// New-style (Dev Dashboard) custom apps have no permanent shpat token — their
+// client-credentials tokens expire every 24h. When SHOPIFY_CLIENT_ID/SECRET are
+// set, fetch a fresh token on boot and every 6h; SHOPIFY_TOKEN env is the
+// fallback for legacy stores with permanent tokens.
+const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
+async function refreshShopifyToken() {
+  if (!SHOPIFY_CLIENT_ID || !SHOPIFY_CLIENT_SECRET || !SHOPIFY_STORE) return;
+  try {
+    const r = await axios.post(
+      `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
+      { grant_type: 'client_credentials', client_id: SHOPIFY_CLIENT_ID, client_secret: SHOPIFY_CLIENT_SECRET },
+      { timeout: 15000 }
+    );
+    if (r.data?.access_token) {
+      SHOPIFY_TOKEN = r.data.access_token;
+      console.log('Shopify token refreshed (client credentials), expires_in:', r.data.expires_in);
+    }
+  } catch (err) {
+    console.error('Shopify token refresh failed:', err.response?.data || err.message);
+  }
+}
+if (SHOPIFY_CLIENT_ID && SHOPIFY_CLIENT_SECRET) {
+  refreshShopifyToken();
+  setInterval(refreshShopifyToken, 6 * 60 * 60 * 1000);
+}
 const QPX_BASE = 'https://api.qpxpress.com';
 
 // Runtime settings — start from env vars, can be updated via /api/settings
