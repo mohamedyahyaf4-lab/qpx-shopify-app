@@ -24,8 +24,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve Vite production build
-app.use(express.static(path.join(__dirname, 'dist')));
+// Serve static assets while keeping the root request on the SPA fallback below,
+// which injects the Shopify API key and store name at runtime.
+app.use(express.static(path.join(__dirname, 'dist'), { index: false }));
 
 // SPA fallback — inject Shopify API key then serve index.html
 app.get('*', (req, res, next) => {
