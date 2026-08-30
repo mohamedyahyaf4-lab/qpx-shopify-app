@@ -402,6 +402,34 @@ function mapShopifyOrder(o) {
   return mapped;
 }
 
+// The browser can keep an order open while it is edited in Shopify. Always
+// reload it by ID immediately before sending so shipment_contents reflects the
+// current line items, not a stale page response.
+async function getCurrentOrderForSending(orderId, qpxCityId) {
+  const response = await axios.get(
+    `https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${encodeURIComponent(orderId)}.json`,
+    { headers: shopHeaders(), timeout: 20000 }
+  );
+  const current = response.data?.order;
+  if (!current) throw new Error('Shopify did not return the current order');
+
+  const mapped = mapShopifyOrder(current);
+  if (mapped.qpx_serial) {
+    const alreadySent = new Error('This order has already been sent to QPX');
+    alreadySent.code = 'QPX_ALREADY_SENT';
+    alreadySent.order = mapped;
+    throw alreadySent;
+  }
+  if (current.cancelled_at) {
+    const cancelled = new Error('This Shopify order is cancelled');
+    cancelled.code = 'SHOPIFY_ORDER_CANCELLED';
+    cancelled.order = mapped;
+    throw cancelled;
+  }
+
+  return { ...mapped, qpx_city_id: qpxCityId || null };
+}
+
 app.get('/api/shopify/orders', async (req, res) => {
   try {
     const { limit = 50, status = 'open', page_info } = req.query;
@@ -473,7 +501,7 @@ app.get('/api/qpx/cities', async (req, res) => {
 
 app.post('/api/qpx/send-orders', async (req, res) => {
   const { orders } = req.body;
-  if (!orders || !orders.length) return res.status(400).json({ error: 'No orders provided' });
+  if (!Array.isArray(orders) || !orders.length) return res.status(400).json({ error: 'No orders provided' });
 
   let token;
   try {
@@ -485,12 +513,10 @@ app.post('/api/qpx/send-orders', async (req, res) => {
 
   const results = [];
 
-  for (const order of orders) {
-    if (order.qpx_serial) {
-      results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'skipped', qpx_serial: order.qpx_serial });
-      continue;
-    }
+  for (const requestedOrder of orders) {
+    let order = null;
     try {
+      order = await getCurrentOrderForSending(requestedOrder.id, requestedOrder.qpx_city_id);
       const isPaid = order.financial_status === 'paid';
       const payload = {
         shipment_contents: order.items,
@@ -555,9 +581,15 @@ app.post('/api/qpx/send-orders', async (req, res) => {
 
       results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'success', qpx_serial: serial });
     } catch (err) {
+      const current = err.order;
+      if (err.code === 'QPX_ALREADY_SENT') {
+        results.push({ shopify_id: current.id, order_number: current.shopify_order_number, status: 'skipped', qpx_serial: current.qpx_serial });
+        continue;
+      }
       const errMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-      console.error(`QPX send error for order ${order.shopify_order_number}:`, errMsg);
-      results.push({ shopify_id: order.id, order_number: order.shopify_order_number, status: 'error', error: errMsg });
+      const reference = order || requestedOrder;
+      console.error(`QPX send error for order ${reference.shopify_order_number || reference.id}:`, errMsg);
+      results.push({ shopify_id: reference.id, order_number: reference.shopify_order_number || null, status: 'error', error: errMsg });
     }
   }
 
