@@ -346,10 +346,26 @@ app.get('/api/webhook-cache/status', (req, res) => {
 
 // ─── Shopify: Get Orders ──────────────────────────────────────────────────────
 
+function getCurrentLineItemQuantity(item) {
+  // Shopify keeps quantity as the historical/original amount after an order
+  // edit. current_quantity is the amount that is still in the order.
+  const current = Number(item.current_quantity ?? item.currentQuantity);
+  if (Number.isFinite(current)) return current;
+  const original = Number(item.quantity);
+  return Number.isFinite(original) ? original : 0;
+}
+
+function getCurrentLineItems(order) {
+  return (Array.isArray(order.line_items) ? order.line_items : [])
+    .map((item) => ({ ...item, current_quantity: getCurrentLineItemQuantity(item) }))
+    .filter((item) => item.current_quantity > 0);
+}
+
 function mapShopifyOrder(o) {
   const addr = o.shipping_address || o.billing_address || {};
   const customer = o.customer || {};
-  const items = o.line_items.map((i) => `${i.name} x${i.quantity}`).join(' | ');
+  const currentLineItems = getCurrentLineItems(o);
+  const items = currentLineItems.map((i) => `${i.name} x${i.current_quantity}`).join(' | ');
 
   const cached = piiCache[String(o.id)] || {};
   const notePii = parseNotePii(o.note) || {};
@@ -384,7 +400,7 @@ function mapShopifyOrder(o) {
     address: [a1, a2].filter(Boolean).join('، '),
     address_full: [a1, a2, city, province, zip].filter(Boolean).join('، '),
     items,
-    total_price: o.total_price,
+    total_price: o.current_total_price ?? o.total_price,
     currency: o.currency,
     financial_status: o.financial_status,
     fulfillment_status: o.fulfillment_status || 'unfulfilled',
@@ -1009,12 +1025,23 @@ app.get('/api/qpx/cleanup', async (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`\n✅ QPX-Shopify Bridge running at http://localhost:${PORT}\n`);
-  if (STATUS_SYNC) {
-    console.log(`⏱️  QPX→Shopify status sync ON (every ${STATUS_SYNC_MIN} min, ${STATUS_SYNC_PAGES} QPX pages)`);
-    setTimeout(runStatusSync, 30000); // first run shortly after boot
-    setInterval(runStatusSync, STATUS_SYNC_MIN * 60 * 1000);
-  }
-});
+function startServer() {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log(`\n✅ QPX-Shopify Bridge running at http://localhost:${port}\n`);
+    if (STATUS_SYNC) {
+      console.log(`⏱️  QPX→Shopify status sync ON (every ${STATUS_SYNC_MIN} min, ${STATUS_SYNC_PAGES} QPX pages)`);
+      setTimeout(runStatusSync, 30000); // first run shortly after boot
+      setInterval(runStatusSync, STATUS_SYNC_MIN * 60 * 1000);
+    }
+  });
+}
+
+if (require.main === module) startServer();
+
+module.exports = {
+  app,
+  getCurrentLineItemQuantity,
+  getCurrentLineItems,
+  mapShopifyOrder,
+};
